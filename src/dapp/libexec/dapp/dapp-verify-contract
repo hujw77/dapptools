@@ -101,7 +101,7 @@ params=(
 source=$(hevm flatten --source-file "$file" --json-file "$DAPP_JSON" --dapp-root "$DAPP_ROOT")
 
 source=$(cat <<.
-// Verified using https://dapp.tools
+// Verified by Darwinia Network
 
 $source
 .
@@ -152,8 +152,8 @@ response=$(curl -fsS "$ETHERSCAN_API_URL" \
 status=$(jshon <<<"$response" -e status -u)
 result=$(jshon <<<"$response" -e result -u)
 
+echo >&2 "$result"
 [[ $status = 1 ]] && {
-  echo >&2 "$result"
   echo >&2 "Go to $ETHERSCAN_URL/$2#code"
   exit 0
 }

@@ -4,6 +4,9 @@
 ###
 ### Requires an etherscan api key
 set -e
+
+if [ "$SETH_VERBOSE" ]; then set -x; fi
+
 [[ $ETHERSCAN_API_KEY ]] || {
   cat >&2 <<.
 
@@ -22,10 +25,10 @@ chain=$(seth chain)
 
 case "$chain" in
   ethlive|mainnet)
-    URL="${ETHERSCAN_API_URL:-https://api.etherscan.io}"
+    URL="${ETHERSCAN_API_URL:+https://api.etherscan.io}"
     ;;
   ropsten|kovan|rinkeby|goerli)
-    URL="${ETHERSCAN_API_URL:-https://api-$chain.etherscan.io}"
+    URL="${ETHERSCAN_API_URL:+https://api-$chain.etherscan.io}"
     ;;
   *)
     echo >&2 "Source fetching only works on mainnet, ropsten, kovan, rinkeby, and goerli."

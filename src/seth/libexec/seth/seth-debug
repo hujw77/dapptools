@@ -9,6 +9,8 @@
 ### will be passed along to hevm for better debugging xp
 set -e
 
+if [ "$SETH_VERBOSE" ]; then set -x; fi
+
 state=$(TMPDIR=. mktemp -d hevm.libs.XXXXX -p /tmp)
 
 export GIT_CONFIG_NOSYSTEM=1

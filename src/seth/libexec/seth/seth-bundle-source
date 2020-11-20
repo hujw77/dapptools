@@ -9,6 +9,8 @@
 # seems like we always just want the first element
 set -e
 
+if [ "$SETH_VERBOSE" ]; then set -x; fi
+
 SRC=$(seth source "$1")
 
 SOLC_VERSION=$(echo "$SRC" | jq '.CompilerVersion')

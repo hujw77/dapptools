@@ -5,8 +5,8 @@ set -e
 mkdir -p "$state"
 # Try to make sure `git commit' definitely succeeds...
 export GIT_CONFIG_NOSYSTEM=1
-export GIT_AUTHOR_NAME=hevm
-export GIT_AUTHOR_EMAIL=hevm@dapphub.com
+export GIT_AUTHOR_NAME=echo
+export GIT_AUTHOR_EMAIL=hujw77@gamil.com
 export GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
 export GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
 gitopts=(-q --no-verify --no-gpg-sign --allow-empty -m "dapp test")
