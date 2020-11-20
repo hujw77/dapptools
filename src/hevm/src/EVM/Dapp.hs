@@ -1,11 +1,12 @@
 {-# Language TemplateHaskell #-}
+{-# Language OverloadedStrings #-}
 
 module EVM.Dapp where
 
 import EVM (Trace, traceCodehash, traceOpIx)
 import EVM.ABI (Event, AbiType)
 import EVM.Debug (srcMapCodePos)
-import EVM.Solidity (SolcContract, CodeType (..), SourceCache, SrcMap)
+import EVM.Solidity (SolcContract, CodeType (..), SourceCache (..), SrcMap, Method)
 import EVM.Solidity (contractName, methodInputs)
 import EVM.Solidity (runtimeCodehash, creationCodehash, abiMap)
 import EVM.Solidity (runtimeSrcmap, creationSrcmap, eventMap)
@@ -25,7 +26,9 @@ import Control.Applicative ((<$>))
 import Control.Arrow ((>>>))
 import Control.Lens
 
-import qualified Data.Map as Map
+import qualified Data.Map        as Map
+import qualified Data.Sequence   as Seq
+import qualified Text.Regex.TDFA as Regex
 
 data DappInfo = DappInfo
   { _dappRoot       :: FilePath
@@ -33,6 +36,7 @@ data DappInfo = DappInfo
   , _dappSolcByHash :: Map W256 (CodeType, SolcContract)
   , _dappSources    :: SourceCache
   , _dappUnitTests  :: [(Text, [(Test, [AbiType])])]
+  , _dappAbiMap     :: Map Word32 Method
   , _dappEventMap   :: Map W256 Event
   , _dappAstIdMap   :: Map Int Value
   , _dappAstSrcMap  :: SrcMap -> Maybe Value
@@ -54,8 +58,7 @@ dappInfo root solcByName sources =
 
   in DappInfo
     { _dappRoot = root
-    , _dappUnitTests = findUnitTests
-      (\a -> "test" `isPrefixOf` a || "prove" `isPrefixOf` a) solcs
+    , _dappUnitTests = findAllUnitTests solcs
     , _dappSources = sources
     , _dappSolcByName = solcByName
     , _dappSolcByHash =
@@ -66,42 +69,73 @@ dappInfo root solcByName sources =
            (f runtimeCodehash  Runtime)
            (f creationCodehash Creation)
 
-    , _dappEventMap =
-        -- Sum up the event ABI maps from all the contracts.
-        mconcat (map (view eventMap) solcs)
+      -- Sum up the ABI maps from all the contracts.
+    , _dappAbiMap   = mconcat (map (view abiMap) solcs)
+    , _dappEventMap = mconcat (map (view eventMap) solcs)
 
     , _dappAstIdMap  = astIds
     , _dappAstSrcMap = astSrcMap astIds
     }
 
+emptyDapp :: DappInfo
+emptyDapp = dappInfo "" mempty (SourceCache mempty mempty mempty mempty)
+
+-- Dapp unit tests are detected by searching within abi methods
+-- that begin with "test" or "prove", that are in a contract with
+-- the "IS_TEST()" abi marker, for a given regular expression.
+--
+-- The regex is matched on the full test method name, including path
+-- and contract, i.e. "path/to/file.sol:TestContract.test_name()".
+--
+-- Tests beginning with "test" are interpreted as concrete tests, whereas
+-- tests beginning with "prove" are interpreted as symbolic tests.
+
 unitTestMarkerAbi :: Word32
 unitTestMarkerAbi = abiKeccak (encodeUtf8 "IS_TEST()")
 
-findUnitTests :: (Text -> Bool) -> ([SolcContract] -> [(Text, [(Test, [AbiType])])])
-findUnitTests matcher =
-  concatMap $ \c ->
-    case preview (abiMap . ix unitTestMarkerAbi) c of
-      Nothing -> []
-      Just _  ->
-        let testNames = unitTestMethodsFiltered matcher c
-        in ([(view contractName c, testNames) | not (null testNames)])
-
-
-unitTestMethodsFiltered :: (Text -> Bool) -> (SolcContract -> [(Test, [AbiType])])
-unitTestMethodsFiltered matcher c = filter (matcher . extractSig . fst) $ unitTestMethods c
-
-unitTestMethods :: SolcContract -> [(Test, [AbiType])]
-unitTestMethods = view abiMap
-                  >>> Map.elems
-                  >>> map (\f -> (mkTest $ view methodSignature f, snd <$> view methodInputs f))
-                  >>> filter (isJust . fst)
-                  >>> fmap (first fromJust)
+findAllUnitTests :: [SolcContract] -> [(Text, [(Test, [AbiType])])]
+findAllUnitTests = findUnitTests ".*:.*\\.(test|prove).*"
 
 mkTest :: Text -> Maybe Test
 mkTest sig
   | "test" `isPrefixOf` sig = Just (ConcreteTest sig)
   | "prove" `isPrefixOf` sig = Just (SymbolicTest sig)
   | otherwise = Nothing
+
+regexMatches :: Text -> Text -> Bool
+regexMatches regexSource =
+  let
+    compOpts =
+      Regex.defaultCompOpt { Regex.lastStarGreedy = True }
+    execOpts =
+      Regex.defaultExecOpt { Regex.captureGroups = False }
+    regex = Regex.makeRegexOpts compOpts execOpts (unpack regexSource)
+  in
+    Regex.matchTest regex . Seq.fromList . unpack
+
+findUnitTests :: Text -> ([SolcContract] -> [(Text, [(Test, [AbiType])])])
+findUnitTests match =
+  concatMap $ \c ->
+    case preview (abiMap . ix unitTestMarkerAbi) c of
+      Nothing -> []
+      Just _  ->
+        let testNames = unitTestMethodsFiltered (regexMatches match) c
+        in [(view contractName c, testNames) | not (null testNames)]
+
+unitTestMethodsFiltered :: (Text -> Bool) -> (SolcContract -> [(Test, [AbiType])])
+unitTestMethodsFiltered matcher c =
+  let
+    testName method = (view contractName c) <> "." <> (extractSig (fst method))
+  in
+    filter (matcher . testName) (unitTestMethods c)
+
+unitTestMethods :: SolcContract -> [(Test, [AbiType])]
+unitTestMethods =
+  view abiMap
+  >>> Map.elems
+  >>> map (\f -> (mkTest $ view methodSignature f, snd <$> view methodInputs f))
+  >>> filter (isJust . fst)
+  >>> fmap (first fromJust)
 
 extractSig :: Test -> Text
 extractSig (ConcreteTest sig) = sig
@@ -116,9 +150,9 @@ traceSrcMap dapp trace =
     Nothing ->
       Nothing
     Just (Creation, solc) ->
-      preview (creationSrcmap . ix i) solc
+      i >>= \i' -> preview (creationSrcmap . ix i') solc
     Just (Runtime, solc) ->
-      preview (runtimeSrcmap . ix i) solc
+      i >>= \i' -> preview (runtimeSrcmap . ix i') solc
 
 showTraceLocation :: DappInfo -> Trace -> Either Text Text
 showTraceLocation dapp trace =

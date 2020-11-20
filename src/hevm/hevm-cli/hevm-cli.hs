@@ -22,7 +22,7 @@ import qualified EVM.Flatten
 import qualified EVM.Stepper
 import qualified EVM.TTY
 import qualified EVM.Emacs
-import EVM.Dev (concatMapM)
+import EVM.Dev (concatMapM, interpretWithTrace)
 
 #if MIN_VERSION_aeson(1, 0, 0)
 import qualified EVM.VMTest as VMTest
@@ -36,7 +36,7 @@ import EVM.Types hiding (word)
 import EVM.UnitTest (UnitTestOptions, coverageReport, coverageForUnitTestContract)
 import EVM.UnitTest (runUnitTestContract)
 import EVM.UnitTest (getParametersFromEnvironmentVariables, testNumber)
-import EVM.Dapp (findUnitTests, dappInfo, DappInfo)
+import EVM.Dapp (findUnitTests, dappInfo, DappInfo, emptyDapp)
 import EVM.Format (showTraceTree, showBranchTree)
 import EVM.RLP (rlpdecode)
 import qualified EVM.Patricia as Patricia
@@ -73,15 +73,14 @@ import Data.Aeson.Lens hiding (values)
 import qualified Data.Vector as V
 import qualified Data.ByteString.Lazy  as Lazy
 
+import qualified Data.SBV               as SBV
 import qualified Data.ByteString        as ByteString
 import qualified Data.ByteString.Char8  as Char8
 import qualified Data.ByteString.Lazy   as LazyByteString
 import qualified Data.Map               as Map
-import qualified Data.Sequence          as Seq
 import qualified System.Timeout         as Timeout
 
 import qualified Paths_hevm      as Paths
-import qualified Text.Regex.TDFA as Regex
 
 import Options.Generic as Options
 
@@ -125,6 +124,7 @@ data Command w
       , smttimeout    :: w ::: Maybe Integer      <?> "Timeout given to SMT solver in milliseconds (default: 20000)"
       , maxIterations :: w ::: Maybe Integer      <?> "Number of times we may revisit a particular branching point"
       , solver        :: w ::: Maybe Text         <?> "Used SMT solver: z3 (default) or cvc4"
+      , smtdebug      :: w ::: Bool               <?> "Print smt queries sent to the solver"
       }
   | Equivalence -- prove equivalence between two programs
       { codeA         :: w ::: ByteString    <?> "Bytecode of the first program"
@@ -134,6 +134,7 @@ data Command w
       , maxIterations :: w ::: Maybe Integer <?> "Number of times we may revisit a particular branching point"
       , solver        :: w ::: Maybe Text    <?> "Used SMT solver: z3 (default) or cvc4"
       , smtoutput     :: w ::: Bool          <?> "Print verbose smt output"
+      , smtdebug      :: w ::: Bool               <?> "Print smt queries sent to the solver"
       }
   | Exec -- Execute a given program with specified env & calldata
       { code        :: w ::: Maybe ByteString <?> "Program bytecode"
@@ -154,6 +155,7 @@ data Command w
       , difficulty  :: w ::: Maybe W256       <?> "Block: difficulty"
       , chainid     :: w ::: Maybe W256       <?> "Env: chainId"
       , debug       :: w ::: Bool             <?> "Run interactively"
+      , jsontrace   :: w ::: Bool             <?> "Print json trace output at every step"
       , trace       :: w ::: Bool             <?> "Dump trace"
       , state       :: w ::: Maybe String     <?> "Path to state repository"
       , cache       :: w ::: Maybe String     <?> "Path to rpc cache repository"
@@ -163,9 +165,10 @@ data Command w
       , dappRoot    :: w ::: Maybe String     <?> "Path to dapp project root directory (default: . )"
       }
   | DappTest -- Run DSTest unit tests
-      { jsonFile    :: w ::: Maybe String             <?> "Filename or path to dapp build output (default: out/*.solc.json)"
-      , dappRoot    :: w ::: Maybe String             <?> "Path to dapp project root directory (default: . )"
+      { jsonFile      :: w ::: Maybe String             <?> "Filename or path to dapp build output (default: out/*.solc.json)"
+      , dappRoot      :: w ::: Maybe String             <?> "Path to dapp project root directory (default: . )"
       , debug         :: w ::: Bool                     <?> "Run interactively"
+      , jsontrace     :: w ::: Bool                     <?> "Print json trace output at every step"
       , fuzzRuns      :: w ::: Maybe Int                <?> "Number of times to run fuzz tests"
       , replay        :: w ::: Maybe (Text, ByteString) <?> "Custom fuzz case to run/debug"
       , rpc           :: w ::: Maybe URL                <?> "Fetch state from a remote node"
@@ -177,13 +180,15 @@ data Command w
       , smttimeout    :: w ::: Maybe Integer            <?> "Timeout given to SMT solver in milliseconds (default: 20000)"
       , maxIterations :: w ::: Maybe Integer            <?> "Number of times we may revisit a particular branching point"
       , solver        :: w ::: Maybe Text               <?> "Used SMT solver: z3 (default) or cvc4"
+      , smtdebug      :: w ::: Bool                     <?> "Print smt queries sent to the solver"
       }
   | BcTest -- Run an Ethereum Blockhain/GeneralState test
-      { file    :: w ::: String    <?> "Path to .json test file"
-      , test    :: w ::: [String]  <?> "Test case filter - only run specified test method(s)"
-      , debug   :: w ::: Bool      <?> "Run interactively"
-      , diff    :: w ::: Bool      <?> "Print expected vs. actual state on failure"
-      , timeout :: w ::: Maybe Int <?> "Execution timeout (default: 10 sec.)"
+      { file      :: w ::: String    <?> "Path to .json test file"
+      , test      :: w ::: [String]  <?> "Test case filter - only run specified test method(s)"
+      , debug     :: w ::: Bool      <?> "Run interactively"
+      , jsontrace :: w ::: Bool      <?> "Print json trace output at every step"
+      , diff      :: w ::: Bool      <?> "Print expected vs. actual state on failure"
+      , timeout   :: w ::: Maybe Int <?> "Execution timeout (default: 10 sec.)"
       }
   | Compliance -- Run Ethereum Blockhain compliance report
       { tests   :: w ::: String       <?> "Path to Ethereum Tests directory"
@@ -228,7 +233,7 @@ instance Options.ParseRecord (Command Options.Wrapped) where
     Options.parseRecordWithModifiers Options.lispCaseModifiers
 
 optsMode :: Command Options.Unwrapped -> Mode
-optsMode x = if debug x then Debug else Run
+optsMode x = if debug x then Debug else if jsontrace x then JsonTrace else Run
 
 applyCache :: (Maybe String, Maybe String) -> IO (EVM.VM -> EVM.VM)
 applyCache (state, cache) =
@@ -305,11 +310,12 @@ main = do
     DappTest {} ->
       withCurrentDirectory root $ do
         testFile <- findJsonFile (jsonFile cmd)
-        runSMTWithTimeOut (solver cmd) (smttimeout cmd) $ query $ do
+        runSMTWithTimeOut (solver cmd) (smttimeout cmd) (smtdebug cmd) $ query $ do
           testOpts <- unitTestOptions cmd testFile
           case (coverage cmd, optsMode cmd) of
             (False, Run) -> dappTest testOpts testFile (cache cmd)
             (False, Debug) -> liftIO $ EVM.TTY.main testOpts root testFile
+            (False, JsonTrace) -> error "json traces not implemented for dappTest"
             (True, _) -> liftIO $ dappCoverage testOpts (optsMode cmd) testFile
     Compliance {} ->
       case (group cmd) of
@@ -374,8 +380,7 @@ dappTest opts solcFile cache = do
   out <- liftIO $ readSolc solcFile
   case out of
     Just (contractMap, _) -> do
-      let matcher = regexMatches (EVM.UnitTest.match opts)
-          unitTests = findUnitTests matcher $ Map.elems contractMap
+      let unitTests = findUnitTests (EVM.UnitTest.match opts) $ Map.elems contractMap
       results <- concatMapM (runUnitTestContract opts contractMap) unitTests
       let (passing, vms) = unzip results
       case cache of
@@ -392,17 +397,6 @@ dappTest opts solcFile cache = do
     Nothing ->
       error ("Failed to read Solidity JSON for `" ++ solcFile ++ "'")
 
-regexMatches :: Text -> Text -> Bool
-regexMatches regexSource =
-  let
-    compOpts =
-      Regex.defaultCompOpt { Regex.lastStarGreedy = True }
-    execOpts =
-      Regex.defaultExecOpt { Regex.captureGroups = False }
-    regex = Regex.makeRegexOpts compOpts execOpts (unpack regexSource)
-  in
-    Regex.matchTest regex . Seq.fromList . unpack
-
 equivalence :: Command Options.Unwrapped -> IO ()
 equivalence cmd =
   do let bytecodeA = hexByteString "--code" . strip0x $ codeA cmd
@@ -412,7 +406,7 @@ equivalence cmd =
        Just sig' -> do method' <- functionAbi sig'
                        return $ Just (view methodSignature method', snd <$> view methodInputs method')
 
-     void . runSMTWithTimeOut (solver cmd) (smttimeout cmd) . query $
+     void . runSMTWithTimeOut (solver cmd) (smttimeout cmd) (smtdebug cmd) . query $
        equivalenceCheck bytecodeA bytecodeB (maxIterations cmd) maybeSignature >>= \case
          Right vm -> do io $ putStrLn "Not equal!"
                         io $ putStrLn "Counterexample:"
@@ -426,18 +420,18 @@ equivalence cmd =
 
 
 -- cvc4 sets timeout via a commandline option instead of smtlib `(set-option)`
-runSMTWithTimeOut :: Maybe Text -> Maybe Integer -> Symbolic a -> IO a
-runSMTWithTimeOut solver maybeTimeout sym
+runSMTWithTimeOut :: Maybe Text -> Maybe Integer -> Bool -> Symbolic a -> IO a
+runSMTWithTimeOut solver maybeTimeout smtdebug sym
   | solver == Just "cvc4" = do
       setEnv "SBV_CVC4_OPTIONS" ("--lang=smt --incremental --interactive --no-interactive-prompt --model-witness-value --tlimit-per=" <> show timeout)
-      a <- runSMTWith cvc4 sym
+      a <- runSMTWith cvc4{SBV.verbose=smtdebug} sym
       setEnv "SBV_CVC4_OPTIONS" ""
       return a
   | solver == Just "z3" = runwithz3
   | solver == Nothing = runwithz3
   | otherwise = error "Unknown solver. Currently supported solvers; z3, cvc4"
  where timeout = fromMaybe 20000 maybeTimeout
-       runwithz3 = runSMTWith z3 $ (setTimeOut timeout) >> sym
+       runwithz3 = runSMTWith z3{SBV.verbose=smtdebug} $ (setTimeOut timeout) >> sym
 
 
 checkForVMErrors :: [EVM.VM] -> [String]
@@ -451,9 +445,6 @@ checkForVMErrors (vm:vms) =
       ) : checkForVMErrors vms
     _ ->
       checkForVMErrors vms
-
-emptyDapp :: DappInfo
-emptyDapp = dappInfo "" mempty (SourceCache mempty mempty mempty mempty)
 
 getSrcInfo :: Command Options.Unwrapped -> IO DappInfo
 getSrcInfo cmd =
@@ -494,7 +485,7 @@ assert cmd = do
           name = view methodSignature method'
       return $ Just (name,typ)
   if debug cmd then
-    runSMTWithTimeOut (solver cmd) (smttimeout cmd) $ query $ do
+    runSMTWithTimeOut (solver cmd) (smttimeout cmd) (smtdebug cmd) $ query $ do
       preState <- symvmFromCommand cmd
       smtState <- queryState
       io $ void $ EVM.TTY.runFromVM
@@ -504,7 +495,7 @@ assert cmd = do
         preState
 
   else
-    runSMTWithTimeOut (solver cmd) (smttimeout cmd) $ query $ do
+    runSMTWithTimeOut (solver cmd) (smttimeout cmd) (smtdebug cmd) $ query $ do
       preState <- symvmFromCommand cmd
       verify preState (maxIterations cmd) rpcinfo (Just checkAssertions) >>= \case
         Right tree -> do
@@ -565,10 +556,9 @@ dappCoverage opts _ solcFile =
   readSolc solcFile >>=
     \case
       Just (contractMap, sourceCache) -> do
-        let matcher = regexMatches (EVM.UnitTest.match opts)
-            unitTests = findUnitTests matcher $ Map.elems contractMap
-        covs <- mconcat <$> mapM (coverageForUnitTestContract opts contractMap sourceCache) unitTests
-
+        let unitTests = findUnitTests (EVM.UnitTest.match opts) $ Map.elems contractMap
+        covs <- mconcat <$> mapM
+          (coverageForUnitTestContract opts contractMap sourceCache) unitTests
         let
           dapp = dappInfo "." contractMap sourceCache
           f (k, vs) = do
@@ -622,6 +612,7 @@ launchExec cmd = do
               Git.saveFacts (Git.RepoAt path) (Facts.cacheFacts (view EVM.cache vm'))
 
     Debug -> void $ EVM.TTY.runFromVM Nothing dapp fetcher vm
+    JsonTrace -> void $ execStateT (interpretWithTrace fetcher EVM.Stepper.runFully) vm
    where fetcher = maybe EVM.Fetch.zero (EVM.Fetch.http block') (rpc cmd)
          block'  = maybe EVM.Fetch.Latest EVM.Fetch.BlockNumber (block cmd)
 
@@ -903,6 +894,8 @@ runVMTest diffmode mode timelimit (name, x) =
             execStateT (EVM.Stepper.interpret EVM.Fetch.zero . void $ EVM.Stepper.execFully) vm0
         Debug ->
           Just <$> EVM.TTY.runFromVM Nothing emptyDapp EVM.Fetch.zero vm0
+        JsonTrace ->
+          Just <$> execStateT (interpretWithTrace EVM.Fetch.zero EVM.Stepper.runFully) vm0
     waitCatch action
   case result of
     Right (Just vm1) -> do
