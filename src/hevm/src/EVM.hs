@@ -20,7 +20,7 @@ import Data.Proxy (Proxy(..))
 import EVM.ABI
 import EVM.Types
 import EVM.Solidity
-import EVM.Concrete (Word(..), w256, createAddress, wordValue, keccakBlob, create2Address, Whiff(..))
+import EVM.Concrete (createAddress, wordValue, keccakBlob, create2Address)
 import EVM.Symbolic
 import EVM.Op
 import EVM.FeeSchedule (FeeSchedule (..))
@@ -178,7 +178,7 @@ data Cache = Cache
 -- | A way to specify an initial VM state
 data VMOpts = VMOpts
   { vmoptContract :: Contract
-  , vmoptCalldata :: (Buffer, (SWord 32)) -- maximum size of uint32 as per eip 1985
+  , vmoptCalldata :: (Buffer, SWord 256)
   , vmoptValue :: SymWord
   , vmoptAddress :: Addr
   , vmoptCaller :: SAddr
@@ -212,7 +212,8 @@ data Frame = Frame
 -- | Call/create info
 data FrameContext
   = CreationContext
-    { creationContextCodehash  :: W256
+    { creationContextAddress   :: Addr
+    , creationContextCodehash  :: W256
     , creationContextReversion :: Map Addr Contract
     , creationContextSubstate  :: SubState
     }
@@ -238,7 +239,7 @@ data FrameState = FrameState
   , _stack        :: [SymWord]
   , _memory       :: Buffer
   , _memorySize   :: Int
-  , _calldata     :: (Buffer, (SWord 32))
+  , _calldata     :: (Buffer, (SWord 256))
   , _callvalue    :: SymWord
   , _caller       :: SAddr
   , _gas          :: Word
@@ -282,7 +283,7 @@ data ContractCode
 -- depending on what type of execution we are doing
 data Storage
   = Concrete (Map Word SymWord)
-  | Symbolic (SArray (WordN 256) (WordN 256))
+  | Symbolic [(SymWord, SymWord)] (SArray (WordN 256) (WordN 256))
   deriving (Show)
 
 -- to allow for Eq Contract (which useful for debugging vmtests)
@@ -290,8 +291,8 @@ data Storage
 -- It should not (cannot) be used though.
 instance Eq Storage where
   (==) (Concrete a) (Concrete b) = fmap forceLit a == fmap forceLit b
-  (==) (Symbolic _) (Concrete _) = False
-  (==) (Concrete _) (Symbolic _) = False
+  (==) (Symbolic _ _) (Concrete _) = False
+  (==) (Concrete _) (Symbolic _ _) = False
   (==) _ _ = error "do not compare two symbolic arrays like this!"
 
 -- | The state of a contract
@@ -751,12 +752,12 @@ exec1 = do
 
         -- op: CALLDATALOAD
         0x35 -> stackOp1 (const g_verylow) $
-          \(S _ x) -> uncurry (readSWordWithBound (sFromIntegral x)) (the state calldata)
+          \ind -> uncurry (readSWordWithBound ind) (the state calldata)
 
         -- op: CALLDATASIZE
         0x36 ->
           limitStack 1 . burn g_base $
-            next >> pushSym ((S (Var "Calldatasize")) . zeroExtend . snd $ (the state calldata))
+            next >> pushSym ((S (Var "Calldatasize")) . snd $ (the state calldata))
 
         -- op: CALLDATACOPY
         0x37 ->
@@ -974,7 +975,7 @@ exec1 = do
                   else do
                     let original = case view storage this of
                                   Concrete _ -> fromMaybe 0 (Map.lookup (forceLit x) (view origStorage this))
-                                  Symbolic _ -> 0 -- we don't use this value anywhere anyway
+                                  Symbolic _ _ -> 0 -- we don't use this value anywhere anyway
                         cost = case (maybeLitWord current, maybeLitWord new) of
                                  (Just current', Just new') ->
                                     if (current' == new') then g_sload
@@ -1597,11 +1598,11 @@ fetchAccount addr continue =
         else continue c
 
 readStorage :: Storage -> SymWord -> Maybe (SymWord)
-readStorage (Symbolic s) (S _ loc) = Just . sw256 $ readArray s loc
+readStorage (Symbolic _ s) (S w loc) = Just $ S (FromStorage w) $ readArray s loc
 readStorage (Concrete s) loc = Map.lookup (forceLit loc) s
 
 writeStorage :: SymWord -> SymWord -> Storage -> Storage
-writeStorage (S _ loc) (S _ val) (Symbolic s) = Symbolic (writeArray s loc val)
+writeStorage k@(S _ loc) v@(S _ val) (Symbolic xs s) = Symbolic ((k,v):xs) (writeArray s loc val)
 writeStorage loc val (Concrete s) = Concrete (Map.insert (forceLit loc) val s)
 
 accessStorage
@@ -1995,46 +1996,47 @@ create self this xGas' xValue xs newAddr initCode = do
     modifying (env . contracts . ix self . nonce) succ
     next
   else burn xGas $ do
-        touchAccount self
-        touchAccount newAddr
-        let
-          store = case view (env . storageModel) vm0 of
-            ConcreteS -> Concrete mempty
-            SymbolicS -> Symbolic $ sListArray 0 []
-            InitialS -> Symbolic $ sListArray 0 []
-          newContract =
-            initialContract (InitCode initCode) & set storage store
-          newContext  =
-            CreationContext { creationContextCodehash  = view codehash newContract
-                            , creationContextReversion = view (env . contracts) vm0
-                            , creationContextSubstate = view (tx . substate) vm0
-                            }
+    touchAccount self
+    touchAccount newAddr
+    let
+      store = case view (env . storageModel) vm0 of
+        ConcreteS -> Concrete mempty
+        SymbolicS -> Symbolic [] $ sListArray 0 []
+        InitialS  -> Symbolic [] $ sListArray 0 []
+      newContract =
+        initialContract (InitCode initCode) & set storage store
+      newContext  =
+        CreationContext { creationContextAddress   = newAddr
+                        , creationContextCodehash  = view codehash newContract
+                        , creationContextReversion = view (env . contracts) vm0
+                        , creationContextSubstate  = view (tx . substate) vm0
+                        }
 
-        zoom (env . contracts) $ do
-          oldAcc <- use (at newAddr)
-          let oldBal = maybe 0 (view balance) oldAcc
+    zoom (env . contracts) $ do
+      oldAcc <- use (at newAddr)
+      let oldBal = maybe 0 (view balance) oldAcc
 
-          assign (at newAddr) (Just (newContract & balance .~ oldBal))
-          modifying (ix self . nonce) succ
+      assign (at newAddr) (Just (newContract & balance .~ oldBal))
+      modifying (ix self . nonce) succ
 
-        transfer self newAddr xValue
+    transfer self newAddr xValue
 
-        pushTrace (FrameTrace newContext)
-        next
-        vm1 <- get
-        pushTo frames $ Frame
-          { _frameContext = newContext
-          , _frameState   = (set stack xs) (view state vm1)
-          }
+    pushTrace (FrameTrace newContext)
+    next
+    vm1 <- get
+    pushTo frames $ Frame
+      { _frameContext = newContext
+      , _frameState   = (set stack xs) (view state vm1)
+      }
 
-        assign state $
-          blankState
-            & set contract   newAddr
-            & set codeContract newAddr
-            & set code       initCode
-            & set callvalue  (litWord xValue)
-            & set caller     (litAddr self)
-            & set gas        xGas'
+    assign state $
+      blankState
+        & set contract   newAddr
+        & set codeContract newAddr
+        & set code       initCode
+        & set callvalue  (litWord xValue)
+        & set caller     (litAddr self)
+        & set gas        xGas'
 
 -- | Replace a contract's code, like when CREATE returns
 -- from the constructor code.
@@ -2102,10 +2104,6 @@ finishFrame how = do
     -- Are there some remaining frames?
     nextFrame : remainingFrames -> do
 
-      -- Pop the top frame.
-      assign frames remainingFrames
-      -- Install the state of the frame to which we shall return.
-      assign state (view frameState nextFrame)
       -- Insert a debug trace.
       insertTrace $
         case how of
@@ -2119,6 +2117,11 @@ finishFrame how = do
             ReturnTrace output (view frameContext nextFrame)
       -- Pop to the previous level of the debug trace stack.
       popTrace
+
+      -- Pop the top frame.
+      assign frames remainingFrames
+      -- Install the state of the frame to which we shall return.
+      assign state (view frameState nextFrame)
 
       -- When entering a call, the gas allowance is counted as burned
       -- in advance; this unburns the remainder and adds it to the
@@ -2164,9 +2167,8 @@ finishFrame how = do
               revertSubstate
               assign (state . returndata) mempty
               push 0
-
         -- Or were we creating?
-        CreationContext _ reversion substate' -> do
+        CreationContext _ _ reversion substate' -> do
           creator <- use (state . contract)
           let
             createe = view (state . contract) oldVm

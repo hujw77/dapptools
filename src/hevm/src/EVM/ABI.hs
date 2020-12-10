@@ -193,8 +193,9 @@ getAbi t = label (Text.unpack (abiTypeSolidity t)) $
           >>= label "bytes data" . getBytesWith256BitPadding)
 
     AbiStringType -> do
-      AbiBytesDynamic x <- getAbi AbiBytesDynamicType
-      pure (AbiString x)
+      AbiString <$>
+        (label "string length prefix" getWord256
+          >>= label "string data" . getBytesWith256BitPadding)
 
     AbiArrayType n t' ->
       AbiArray n t' <$> getAbiSeq n (repeat t')
@@ -500,13 +501,13 @@ makeAbiValue typ str = case readP_to_S (parseAbiValue typ) str of
   ((val,_):_) -> val
 
 parseAbiValue :: AbiType -> ReadP AbiValue
-parseAbiValue (AbiUIntType n) = do W256 w256 <- readS_to_P reads
-                                   return $ AbiUInt n w256
-parseAbiValue (AbiIntType n) = do W256 w256 <- readS_to_P reads
-                                  return $ AbiInt n (num w256)
+parseAbiValue (AbiUIntType n) = do W256 w <- readS_to_P reads
+                                   return $ AbiUInt n w
+parseAbiValue (AbiIntType n) = do W256 w <- readS_to_P reads
+                                  return $ AbiInt n (num w)
 parseAbiValue AbiAddressType = AbiAddress <$> readS_to_P reads
-parseAbiValue AbiBoolType = (do W256 w256 <- readS_to_P reads
-                                return $ AbiBool (w256 /= 0))
+parseAbiValue AbiBoolType = (do W256 w <- readS_to_P reads
+                                return $ AbiBool (w /= 0))
                             <|> (do Boolz b <- readS_to_P reads
                                     return $ AbiBool b)
 parseAbiValue (AbiBytesType n) = AbiBytes n <$> do ByteStringS bytes <- readS_to_P reads

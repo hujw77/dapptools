@@ -21,7 +21,6 @@ import Data.Text (Text, pack, unpack)
 import Data.SBV hiding (Word, output)
 import EVM
 import EVM.ABI
-import EVM.Concrete
 import EVM.Symbolic
 import EVM.Dapp
 import EVM.Debug (srcMapCodePos)
@@ -418,7 +417,7 @@ instance SDisplay (SExpr Text) where
   sexp = id
 
 instance SDisplay Storage where
-  sexp (Symbolic _) = error "idk"
+  sexp (Symbolic _ _) = error "idk"
   sexp (Concrete d) = sexp d
 
 instance SDisplay VM where
@@ -540,7 +539,7 @@ initialStateForTest opts@(UnitTestOptions {..}) (contractPath, testName) =
     script = do
       Stepper.evm . pushTrace . EntryTrace $
         "test " <> testName <> " (" <> contractPath <> ")"
-      initializeUnitTest opts
+      initializeUnitTest opts testContract
       void (runUnitTest opts testName (AbiTuple mempty))
     ui0 =
       UiVmState

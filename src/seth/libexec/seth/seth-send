@@ -19,6 +19,9 @@
 ###
 ### See also seth-call(1), seth-sign(1), seth-publish(1), seth-receipt(1).
 set -e
+
+if [ "$SETH_VERBOSE" ]; then set -x; fi
+
 [[ $1 ]] || seth --fail-usage "$0"
 
 [[ $ETH_FROM ]] ||

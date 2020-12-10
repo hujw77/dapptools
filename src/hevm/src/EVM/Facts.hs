@@ -36,10 +36,9 @@ module EVM.Facts
   ) where
 
 import EVM          (VM, Contract, Cache)
-import EVM.Concrete (Word)
-import EVM.Symbolic (litWord, SymWord, forceLit)
+import EVM.Symbolic (litWord, forceLit)
 import EVM          (balance, nonce, storage, bytecode, env, contracts, contract, state, cache, fetched)
-import EVM.Types    (Addr)
+import EVM.Types    (Addr, Word, SymWord)
 
 import qualified EVM
 
@@ -121,7 +120,7 @@ contractFacts a x = storageFacts a x ++
 
 storageFacts :: Addr -> Contract -> [Fact]
 storageFacts a x = case view storage x of
-  EVM.Symbolic _ -> []
+  EVM.Symbolic _ _ -> []
   EVM.Concrete s -> map f (Map.toList s)
   where
     f :: (Word, SymWord) -> Fact

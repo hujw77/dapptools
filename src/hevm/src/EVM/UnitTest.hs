@@ -16,7 +16,7 @@ import EVM.Format
 import EVM.Solidity
 import EVM.SymExec
 import EVM.Types
-import EVM.VMTest
+import EVM.Transaction (initTx)
 import qualified EVM.Fetch
 
 import qualified EVM.FeeSchedule as FeeSchedule
@@ -36,15 +36,18 @@ import qualified Data.ByteString.Lazy as BSLazy
 import qualified Data.SBV.Trans.Control as SBV (Query, getValue, resetAssertions)
 import qualified Data.SBV.Internals as SBV (State)
 import Data.Bifunctor     (first)
+import Data.Binary.Get    (runGet)
 import Data.ByteString    (ByteString)
 import Data.SBV    hiding (verbose)
 import Data.SBV.Control   (CheckSatResult(..), checkSat)
+import Data.Decimal       (DecimalRaw(..))
 import Data.Either        (isRight, lefts)
 import Data.Foldable      (toList)
 import Data.Map           (Map)
 import Data.Maybe         (fromMaybe, catMaybes, fromJust, isJust, fromMaybe, mapMaybe)
 import Data.Monoid        ((<>))
 import Data.Text          (isPrefixOf, stripSuffix, intercalate, Text, pack, unpack)
+import Data.Text.Encoding (encodeUtf8)
 import Data.Word          (Word32)
 import System.Environment (lookupEnv)
 import System.IO          (hFlush, stdout)
@@ -119,8 +122,8 @@ type ABIMethod = Text
 
 -- | Assuming a constructor is loaded, this stepper will run the constructor
 -- to create the test contract, give it an initial balance, and run `setUp()'.
-initializeUnitTest :: UnitTestOptions -> Stepper ()
-initializeUnitTest UnitTestOptions { .. } = do
+initializeUnitTest :: UnitTestOptions -> SolcContract -> Stepper ()
+initializeUnitTest UnitTestOptions { .. } theContract = do
 
   let addr = testAddress testParams
 
@@ -133,15 +136,19 @@ initializeUnitTest UnitTestOptions { .. } = do
   -- Constructor is loaded; run until it returns code
   void Stepper.execFully
 
-  -- Give a balance to the test target
   Stepper.evm $ do
+    -- Give a balance to the test target
     env . contracts . ix addr . balance += w256 (testBalanceCreate testParams)
 
-    -- Initialize the test contract
-    let cd = abiMethod "setUp()" emptyAbi
-    setupCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
-    popTrace
-    pushTrace (EntryTrace "initialize test")
+    -- call setUp(), if it exists, to initialize the test contract
+    let theAbi = view abiMap theContract
+        setUp  = abiKeccak (encodeUtf8 "setUp()")
+        cd     = abiMethod "setUp()" emptyAbi
+
+    when (isJust (Map.lookup setUp theAbi)) $ do
+      makeTxCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
+      popTrace
+      pushTrace (EntryTrace "setUp()")
 
   -- Let `setUp()' run to completion
   res <- Stepper.execFully
@@ -162,7 +169,7 @@ execTest UnitTestOptions { .. } method args = do
   -- Set up the call to the test method
   Stepper.evm $ do
     let cd = abiMethod method args
-    setupCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
+    makeTxCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
     pushTrace (EntryTrace method)
   -- Try running the test method
   Stepper.execFully >>= \case
@@ -181,7 +188,7 @@ checkFailures UnitTestOptions { .. } method args bailed = do
     Stepper.evm $ do
       popTrace
       let cd = abiMethod "failed()" args
-      setupCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
+      makeTxCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
     res <- Stepper.execFully -- >>= \(ConcreteBuffer bs) -> (Stepper.decode AbiBoolType bs)
     case res of
       Right (ConcreteBuffer r) ->
@@ -343,7 +350,7 @@ coverageForUnitTestContract
       (vm1, cov1) <-
         execStateT
           (interpretWithCoverage opts
-            (Stepper.enter name >> initializeUnitTest opts))
+            (Stepper.enter name >> initializeUnitTest opts theContract))
           (vm0, mempty)
 
       -- Define the thread spawner for test cases
@@ -387,7 +394,7 @@ runUnitTestContract
       vm1 <-
         liftIO $ execStateT
           (EVM.Stepper.interpret oracle
-            (Stepper.enter name >> initializeUnitTest opts))
+            (Stepper.enter name >> initializeUnitTest opts theContract))
           vm0
 
       case view result vm1 of
@@ -521,11 +528,7 @@ symRun opts@UnitTestOptions{..} concreteVm testName types = do
 
     -- get all posible postVMs for the test method
     allPaths <- fst <$> runStateT
-        (EVM.SymExec.interpret
-          (EVM.Fetch.oracle smtState Nothing False)
-          maxIter
-          (execSymTest opts testName cd))
-        vm
+        (EVM.SymExec.interpret oracle maxIter (execSymTest opts testName cd)) vm
     results <- forM allPaths $
       -- If the vm execution succeeded, check if the vm is reachable,
       -- and if any ds-test assertions were triggered
@@ -589,7 +592,7 @@ symFailure UnitTestOptions {..} testName failures' = mconcat
           _ -> ""
       ]
 
-prettyCalldata :: (Buffer, SWord 32) -> Text -> [AbiType]-> SBV.Query Text
+prettyCalldata :: (Buffer, SWord 256) -> Text -> [AbiType]-> SBV.Query Text
 prettyCalldata (buffer, cdlen) sig types = do
   cdlen' <- num <$> SBV.getValue cdlen
   calldatainput <- case buffer of
@@ -600,11 +603,11 @@ prettyCalldata (buffer, cdlen) sig types = do
                   (AbiTupleType (Vector.fromList types))
                   (BSLazy.fromStrict (BS.drop 4 calldatainput))))
 
-execSymTest :: UnitTestOptions -> ABIMethod -> (Buffer, SWord 32) -> Stepper (Bool, VM)
+execSymTest :: UnitTestOptions -> ABIMethod -> (Buffer, SWord 256) -> Stepper (Bool, VM)
 execSymTest opts@UnitTestOptions{ .. } method cd = do
   -- Set up the call to the test method
   Stepper.evm $ do
-    setupCall testParams cd
+    makeTxCall testParams cd
     pushTrace (EntryTrace method)
   -- Try running the test method
   Stepper.runFully >>= \vm' -> case view result vm' of
@@ -622,7 +625,7 @@ checkSymFailures UnitTestOptions { .. } = do
   Stepper.evm $ do
     popTrace
     let cd = abiMethod "failed()" emptyAbi
-    setupCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
+    makeTxCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
   Stepper.runFully
 
 indentLines :: Int -> Text -> Text
@@ -662,55 +665,74 @@ formatTestLogs events xs =
     [] -> "\n"
     ys -> "\n" <> intercalate "\n" ys <> "\n\n"
 
+-- Here we catch and render some special logs emitted by ds-test,
+-- with the intent to then present them in a separate view to the
+-- regular trace output.
 formatTestLog :: Map W256 Event -> Log -> Maybe Text
 formatTestLog _ (Log _ _ []) = Nothing
 formatTestLog events (Log _ args (topic:_)) =
-  case maybeLitWord topic of
+  case maybeLitWord topic >>= \t1 -> (Map.lookup (wordValue t1) events) of
     Nothing -> Nothing
-    Just t -> case (Map.lookup (wordValue t) events) of
-                   Nothing -> Nothing
-                   Just (Event name _ _) -> case name of
-                     "logs" ->
-                       Just $ formatSString args
+    Just (Event name _ types) ->
+      case (name <> parenthesise (abiTypeSolidity <$> (unindexed types))) of
+        "log(string)" -> Just $ unquote $ showValue AbiStringType args
 
-                     "log_bytes32" ->
-                       Just $ formatSBytes args
+        -- log_named_x(string, x)
+        "log_named_bytes32(string, bytes32)" -> log_named
+        "log_named_address(string, address)" -> log_named
+        "log_named_int(string, int256)"      -> log_named
+        "log_named_uint(string, uint256)"    -> log_named
+        "log_named_bytes(string, bytes)"     -> log_named
+        "log_named_string(string, string)"   -> log_named
 
-                     "log_named_bytes32" ->
-                       let key = grab 32 args
-                           val = ditch 32 args
-                       in Just $ formatSString key <> ": " <> formatSBytes val
+        -- log_named_decimal_x(string, uint, x)
+        "log_named_decimal_int(string, int256, uint256)"   -> log_named_decimal
+        "log_named_decimal_uint(string, uint256, uint256)" -> log_named_decimal
 
-                     "log_named_address" ->
-                       let key = grab 32 args
-                           val = ditch 44 args
-                       in Just $ formatSString key <> ": " <> formatSBinary val
+        -- log_x(x)
+        "log_bytes32(bytes32)" -> log_unnamed
+        "log_address(address)" -> log_unnamed
+        "log_int(int256)"      -> log_unnamed
+        "log_uint(uint256)"    -> log_unnamed
+        "log_bytes(bytes)"     -> log_unnamed
+        "log_string(string)"   -> log_unnamed
 
-                     "log_named_int" ->
-                       let key = grab 32 args
-                           val = case maybeLitWord (readMemoryWord 32 args) of
-                             Just c -> showDec Signed (wordValue c)
-                             Nothing -> "<symbolic int>"
-                      in Just $ formatSString key <> ": " <> val
+        -- log_named_x(bytes32, x), as used in older versions of ds-test.
+        -- bytes32 are opportunistically represented as strings in Format.hs
+        "log_named_bytes32(bytes32, bytes32)" -> log_named
+        "log_named_address(bytes32, address)" -> log_named
+        "log_named_int(bytes32, int256)"      -> log_named
+        "log_named_uint(bytes32, uint256)"    -> log_named
 
-                     "log_named_uint" ->
-                       let key = grab 32 args
-                           val = case maybeLitWord (readMemoryWord 32 args) of
-                             Just c -> showDec Unsigned (wordValue c)
-                             Nothing -> "<symbolic uint>"
-                       in Just $ formatSString key <> ": " <> val
+        _ -> Nothing
 
--- TODO: event logs (bytes);
--- TODO: event log_named_decimal_int  (bytes32 key, int val, uint decimals);
--- TODO: event log_named_decimal_uint (bytes32 key, uint val, uint decimals);
+        where
+          ts = unindexed types
+          unquote = Text.dropAround (\c -> c == '"' || c == '«' || c == '»')
+          log_unnamed =
+            Just $ showValue (head ts) args
+          log_named =
+            let [key, val] = take 2 (textValues ts args)
+            in Just $ unquote key <> ": " <> val
+          showDecimal dec val =
+            pack $ show $ Decimal (num dec) val
+          log_named_decimal =
+            case args of
+              (ConcreteBuffer b) ->
+                case toList $ runGet (getAbiSeq (length ts) ts) (BSLazy.fromStrict b) of
+                  [key, (AbiUInt 256 val), (AbiUInt 256 dec)] ->
+                    Just $ (unquote (showAbiValue key)) <> ": " <> showDecimal dec val
+                  [key, (AbiInt 256 val), (AbiUInt 256 dec)] ->
+                    Just $ (unquote (showAbiValue key)) <> ": " <> showDecimal dec val
+                  _ -> Nothing
+              (SymbolicBuffer _) -> Just "<symbolic decimal>"
 
-                     _ -> Nothing
 
 word32Bytes :: Word32 -> ByteString
 word32Bytes x = BS.pack [byteAt x (3 - i) | i <- [0..3]]
 
-setupCall :: TestVMParams -> (Buffer, SWord 32) -> EVM ()
-setupCall TestVMParams{..} cd = do
+makeTxCall :: TestVMParams -> (Buffer, SWord 256) -> EVM ()
+makeTxCall TestVMParams{..} cd = do
   resetState
   assign (tx . isCreate) False
   loadContract testAddress
@@ -763,8 +785,12 @@ symbolify vm =
      & set (env . storageModel) InitialS
   where
     mkSymStorage :: Storage -> Storage
-    mkSymStorage (Symbolic _) = error "should not happen"
-    mkSymStorage (Concrete s) = Symbolic $ sListArray 0 [(literal $ toSizzle k, v) | (C _ k, S _ v) <- Map.toList s]
+    mkSymStorage (Symbolic _ _) = error "should not happen"
+    mkSymStorage (Concrete s) =
+      let
+        list = [(literal $ toSizzle k, v) | (C _ k, S _ v) <- Map.toList s]
+        symlist = [(litWord k, v) | (k, v) <- Map.toList s]
+      in Symbolic symlist $ sListArray 0 list
 
 getParametersFromEnvironmentVariables :: Maybe Text -> IO TestVMParams
 getParametersFromEnvironmentVariables rpc = do

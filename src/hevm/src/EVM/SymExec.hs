@@ -19,8 +19,6 @@ import qualified Control.Monad.Operational as Operational
 import Control.Monad.State.Strict hiding (state)
 import Data.Maybe (catMaybes)
 import EVM.Types
-import EVM.Concrete (Whiff(..))
-import EVM.Symbolic (SymWord(..), sw256)
 import EVM.Concrete (createAddress)
 import qualified EVM.FeeSchedule as FeeSchedule
 import Data.SBV.Trans.Control
@@ -49,7 +47,7 @@ sbytes1024 = liftA2 (++) sbytes512 sbytes512
 -- We don't assume input types are restricted to their proper range here;
 -- such assumptions should instead be given as preconditions.
 -- This could catch some interesting calldata mismanagement errors.
-symAbiArg :: AbiType -> Query ([SWord 8], SWord 32)
+symAbiArg :: AbiType -> Query ([SWord 8], SWord 256)
 symAbiArg (AbiUIntType n) | n `mod` 8 == 0 && n <= 256 = do x <- sbytes32
                                                             return (x, 32)
                           | otherwise = error "bad type"
@@ -85,7 +83,7 @@ symAbiArg n =
 -- with concrete arguments.
 -- Any argument given as "<symbolic>" or omitted at the tail of the list are
 -- kept symbolic.
-symCalldata :: Text -> [AbiType] -> [String] -> Query ([SWord 8], SWord 32)
+symCalldata :: Text -> [AbiType] -> [String] -> Query ([SWord 8], SWord 256)
 symCalldata sig typesignature concreteArgs =
   let args = concreteArgs <> replicate (length typesignature - length concreteArgs)  "<symbolic>"
       mkArg typ "<symbolic>" = symAbiArg typ
@@ -105,14 +103,14 @@ abstractVM typesignature concreteArgs x storagemodel = do
       Just (name, typs) -> do (cd, cdlen) <- symCalldata name typs concreteArgs
                               return (cd, cdlen, (sTrue, Val "True"))
   symstore <- case storagemodel of
-    SymbolicS -> Symbolic <$> freshArray_ Nothing
-    InitialS -> Symbolic <$> freshArray_ (Just 0)
+    SymbolicS -> Symbolic [] <$> freshArray_ Nothing
+    InitialS -> Symbolic [] <$> freshArray_ (Just 0)
     ConcreteS -> return $ Concrete mempty
   c <- SAddr <$> freshVar_
   value' <- sw256 <$> freshVar_
   return $ loadSymVM (RuntimeCode x) symstore storagemodel c value' (SymbolicBuffer cd', cdlen) & over constraints ((<>) [cdconstraint])
 
-loadSymVM :: ContractCode -> Storage -> StorageModel -> SAddr -> SymWord -> (Buffer, SWord 32) -> VM
+loadSymVM :: ContractCode -> Storage -> StorageModel -> SAddr -> SymWord -> (Buffer, SWord 256) -> VM
 loadSymVM x initStore model addr callvalue' calldata' =
     (makeVm $ VMOpts
     { vmoptContract = contractWithStore x initStore
@@ -142,7 +140,12 @@ data BranchInfo = BranchInfo
     _branchCondition    :: Maybe Whiff
   }
 
-interpret' :: Fetch.Fetcher -> Maybe Integer -> VM -> Query (Tree BranchInfo)
+doInterpret :: Fetch.Fetcher -> Maybe Integer -> VM -> Query (Tree BranchInfo)
+doInterpret fetcher maxIter vm = let
+      f (vm', cs) = Node (BranchInfo (if length cs == 0 then vm' else vm) Nothing) cs
+    in f <$> interpret' fetcher maxIter vm
+
+interpret' :: Fetch.Fetcher -> Maybe Integer -> VM -> Query (VM, [(Tree BranchInfo)])
 interpret' fetcher maxIter vm = let
   cont s = interpret' fetcher maxIter $ execState s vm
   in case view EVM.result vm of
@@ -160,18 +163,21 @@ interpret' fetcher maxIter vm = let
 
     Just (VMFailure (Choose (EVM.PleaseChoosePath whiff continue)))
       -> case maxIterationsReached vm maxIter of
-        Nothing -> do
+        Nothing -> let
+          lvm = execState (continue True) vm
+          rvm = execState (continue False) vm
+          in do
             push 1
-            left <- cont $ continue True
+            (leftvm, left) <- interpret' fetcher maxIter lvm
             pop 1
             push 1
-            right <- cont $ continue False
+            (rightvm, right) <- interpret' fetcher maxIter rvm
             pop 1
-            return $ Node (BranchInfo vm (Just whiff)) [left, right]
+            return (vm, [Node (BranchInfo leftvm (Just whiff)) left, Node (BranchInfo rightvm (Just whiff)) right])
         Just n -> cont $ continue (not n)
 
     Just _
-      -> return $ Node (BranchInfo vm Nothing) []
+      -> return (vm, [])
 
 -- | Interpreter which explores all paths at
 -- | branching points.
@@ -285,8 +291,8 @@ consistentTree (Node b xs) = do
     return Nothing
   else
     return $ Just (Node b consistentChildren)
-    
-  
+
+
 leaves :: Tree BranchInfo -> [VM]
 leaves (Node x []) = [_vm x]
 leaves (Node _ xs) = concatMap leaves xs
@@ -296,9 +302,8 @@ leaves (Node _ xs) = concatMap leaves xs
 -- or `Left (Tree BranchInfo)`, if the postcondition holds for all endstates.
 verify :: VM -> Maybe Integer -> Maybe (Fetch.BlockNumber, Text) -> Maybe Postcondition -> Query (Either (Tree BranchInfo) (Tree BranchInfo))
 verify preState maxIter rpcinfo maybepost = do
-  let model = view (env . storageModel) preState
   smtState <- queryState
-  tree <- interpret' (Fetch.oracle (Just smtState) rpcinfo False) maxIter preState
+  tree <- doInterpret (Fetch.oracle (Just smtState) rpcinfo False) maxIter preState
   case maybepost of
     (Just post) -> do
       let livePaths = pruneDeadPaths $ leaves tree
@@ -334,10 +339,10 @@ equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
 
   smtState <- queryState
   push 1
-  aVMs <- interpret' (Fetch.oracle (Just smtState) Nothing False) maxiter preStateA
+  aVMs <- doInterpret (Fetch.oracle (Just smtState) Nothing False) maxiter preStateA
   pop 1
   push 1
-  bVMs <- interpret' (Fetch.oracle (Just smtState) Nothing False) maxiter preStateB
+  bVMs <- doInterpret (Fetch.oracle (Just smtState) Nothing False) maxiter preStateB
   pop 1
   -- Check each pair of endstates for equality:
   let differingEndStates = uncurry distinct <$> [(a,b) | a <- pruneDeadPaths (leaves aVMs), b <- pruneDeadPaths (leaves bVMs)]
@@ -346,7 +351,7 @@ equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
             (aSelf, bSelf) = both' (view (state . contract)) (a, b)
             (aEnv, bEnv) = both' (view (env . contracts)) (a, b)
             (aResult, bResult) = both' (view result) (a, b)
-            (Symbolic aStorage, Symbolic bStorage) = (view storage (aEnv ^?! ix aSelf), view storage (bEnv ^?! ix bSelf))
+            (Symbolic _ aStorage, Symbolic _ bStorage) = (view storage (aEnv ^?! ix aSelf), view storage (bEnv ^?! ix bSelf))
             differingResults = case (aResult, bResult) of
 
               (Just (VMSuccess aOut), Just (VMSuccess bOut)) ->
@@ -362,7 +367,7 @@ equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
 
               (Just _, Just _) -> sTrue
 
-              _ -> error "Internal error during symbolic execution (should not be possible)"
+              errormsg -> error $ show errormsg
 
         in sAnd (fst <$> aPath) .&& sAnd (fst <$> bPath) .&& differingResults
   -- If there exists a pair of endstates where this is not the case,

@@ -12,6 +12,8 @@ module EVM.VMTest
   , checkExpectation
   ) where
 
+import Prelude hiding (Word)
+
 import qualified EVM
 import EVM (contractcode, storage, origStorage, balance, nonce, Storage(..), initialContract)
 import qualified EVM.Concrete as EVM
@@ -21,7 +23,7 @@ import EVM.Symbolic
 import EVM.Transaction
 import EVM.Types
 
-import Data.SBV
+import Data.SBV hiding (Word)
 
 import Control.Arrow ((***), (&&&))
 import Control.Lens
@@ -30,7 +32,7 @@ import Control.Monad
 import Data.Aeson ((.:), FromJSON (..))
 import Data.Foldable (fold)
 import Data.Map (Map)
-import Data.Maybe (fromMaybe, isNothing, isJust)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Witherable (Filterable, catMaybes)
 
 import qualified Data.Map          as Map
@@ -63,15 +65,6 @@ data BlockchainCase = BlockchainCase
   , blockchainNetwork :: String
   } deriving Show
 
-accountAt :: Addr -> Getter (Map Addr EVM.Contract) EVM.Contract
-accountAt a = (at a) . (to $ fromMaybe newAccount)
-
-touchAccount :: Addr -> Map Addr EVM.Contract -> Map Addr EVM.Contract
-touchAccount a = Map.insertWith (flip const) a newAccount
-
-newAccount :: EVM.Contract
-newAccount = initialContract $ EVM.RuntimeCode mempty
-
 splitEithers :: (Filterable f) => f (Either a b) -> (f a, f b)
 splitEithers =
   (catMaybes *** catMaybes)
@@ -99,7 +92,7 @@ checkStateFail diff x vm (okState, okMoney, okNonce, okData, okCode) = do
     check = checkContracts x
     expected = testExpectation x
     actual = view (EVM.env . EVM.contracts . to (fmap (clearZeroStorage.clearOrigStorage))) vm
-    printStorage (EVM.Symbolic c) = show c
+    printStorage (EVM.Symbolic _ c) = show c
     printStorage (EVM.Concrete c) = show $ Map.toList c
 
   putStr (unwords reason)
@@ -145,7 +138,7 @@ clearOrigStorage = set origStorage mempty
 
 clearZeroStorage :: EVM.Contract -> EVM.Contract
 clearZeroStorage c = case view storage c of
-  EVM.Symbolic _ -> c
+  EVM.Symbolic _ _ -> c
   EVM.Concrete m -> let store = Map.filter (\x -> forceLit x /= 0) m
                     in set EVM.storage (EVM.Concrete store) c
 
@@ -166,16 +159,16 @@ clearCode = set contractcode (EVM.RuntimeCode mempty)
 instance FromJSON EVM.Contract where
   parseJSON (JSON.Object v) = do
     code <- (EVM.RuntimeCode <$> (hexText <$> v .: "code"))
-    storage' <- Map.mapKeys EVM.w256 <$> v .: "storage"
+    storage' <- Map.mapKeys w256 <$> v .: "storage"
     balance' <- v .: "balance"
     nonce'   <- v .: "nonce"
     return
       $
       EVM.initialContract code
-       & balance .~ EVM.w256 balance'
-       & nonce   .~ EVM.w256 nonce'
-       & storage .~ EVM.Concrete (fmap (litWord . EVM.w256) storage')
-       & origStorage .~ fmap EVM.w256 storage'
+       & balance .~ w256 balance'
+       & nonce   .~ w256 nonce'
+       & storage .~ EVM.Concrete (fmap (litWord . w256) storage')
+       & origStorage .~ fmap w256 storage'
 
   parseJSON invalid =
     JSON.typeMismatch "Contract" invalid
@@ -265,14 +258,14 @@ fromBlockchainCase' block tx preState postState =
         (EVM.VMOpts
          { vmoptContract      = EVM.initialContract theCode
          , vmoptCalldata      = cd
-         , vmoptValue         = litWord (EVM.w256 $ txValue tx)
+         , vmoptValue         = litWord (w256 $ txValue tx)
          , vmoptAddress       = toAddr
          , vmoptCaller        = litAddr origin
          , vmoptOrigin        = origin
          , vmoptGas           = txGasLimit tx - fromIntegral (txGasCost feeSchedule tx)
          , vmoptGaslimit      = txGasLimit tx
          , vmoptNumber        = blockNumber block
-         , vmoptTimestamp     = litWord $ EVM.w256 $ blockTimestamp block
+         , vmoptTimestamp     = litWord $ w256 $ blockTimestamp block
          , vmoptCoinbase      = blockCoinbase block
          , vmoptDifficulty    = blockDifficulty block
          , vmoptMaxCodeSize   = 24576
@@ -303,9 +296,9 @@ validateTx tx cs = do
   origin        <- sender 1 tx
   originBalance <- (view balance) <$> view (at origin) cs
   originNonce   <- (view nonce)   <$> view (at origin) cs
-  let gasDeposit = EVM.w256 $ (txGasPrice tx) * (txGasLimit tx)
-  if gasDeposit + (EVM.w256 $ txValue tx) <= originBalance
-    && (EVM.w256 $ txNonce tx) == originNonce
+  let gasDeposit = w256 $ (txGasPrice tx) * (txGasLimit tx)
+  if gasDeposit + (w256 $ txValue tx) <= originBalance
+    && (w256 $ txNonce tx) == originNonce
   then Just ()
   else Nothing
 
@@ -330,46 +323,3 @@ vmForCase x =
       & set (EVM.env . EVM.contracts) (checkContracts x)
   in
     initTx vm
-
--- | Increments origin nonce and pays gas deposit
-setupTx :: Addr -> Addr -> EVM.Word -> EVM.Word -> Map Addr EVM.Contract -> Map Addr EVM.Contract
-setupTx origin coinbase gasPrice gasLimit prestate =
-  let gasCost = gasPrice * gasLimit
-  in (Map.adjust ((over nonce   (+ 1))
-               . (over balance (subtract gasCost))) origin)
-    . touchAccount origin
-    . touchAccount coinbase $ prestate
-
--- | Given a valid tx loaded into the vm state,
--- subtract gas payment from the origin, increment the nonce
--- and pay receiving address
-initTx :: EVM.VM -> EVM.VM
-initTx vm = let
-    toAddr   = view (EVM.state . EVM.contract) vm
-    origin   = view (EVM.tx . EVM.origin) vm
-    gasPrice = view (EVM.tx . EVM.gasprice) vm
-    gasLimit = view (EVM.tx . EVM.txgaslimit) vm
-    coinbase = view (EVM.block . EVM.coinbase) vm
-    value    = view (EVM.state . EVM.callvalue) vm
-    toContract = initialContract (EVM.InitCode (view (EVM.state . EVM.code) vm))
-    preState = setupTx origin coinbase gasPrice gasLimit $ view (EVM.env . EVM.contracts) vm
-    oldBalance = view (accountAt toAddr . balance) preState
-    creation = view (EVM.tx . EVM.isCreate) vm
-    initState =
-      (if isJust (maybeLitWord value)
-       then (Map.adjust (over balance (subtract (forceLit value))) origin)
-        . (Map.adjust (over balance (+ (forceLit value))) toAddr)
-       else id)
-      . (if creation
-         then Map.insert toAddr (toContract & balance .~ oldBalance)
-         else touchAccount toAddr)
-      $ preState
-
-    touched = if creation
-              then [origin]
-              else [origin, toAddr]
-
-    in
-      vm & EVM.env . EVM.contracts .~ initState
-         & EVM.tx . EVM.txReversion .~ preState
-         & EVM.tx . EVM.substate . EVM.touchedAccounts .~ touched

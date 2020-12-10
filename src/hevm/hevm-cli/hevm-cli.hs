@@ -14,8 +14,8 @@ module Main where
 
 import EVM (StorageModel(..))
 import qualified EVM
-import EVM.Concrete (createAddress, Whiff(..), wordValue)
-import EVM.Symbolic (forceLitBytes, litAddr, w256lit, SymWord(..), len, forceLit)
+import EVM.Concrete (createAddress,  wordValue)
+import EVM.Symbolic (forceLitBytes, litAddr, w256lit, len, forceLit)
 import qualified EVM.FeeSchedule as FeeSchedule
 import qualified EVM.Fetch
 import qualified EVM.Flatten
@@ -37,7 +37,7 @@ import EVM.UnitTest (UnitTestOptions, coverageReport, coverageForUnitTestContrac
 import EVM.UnitTest (runUnitTestContract)
 import EVM.UnitTest (getParametersFromEnvironmentVariables, testNumber)
 import EVM.Dapp (findUnitTests, dappInfo, DappInfo, emptyDapp)
-import EVM.Format (showTraceTree, showBranchTree)
+import EVM.Format (showTraceTree, showTree', renderTree, showBranchInfoWithAbi, showLeafInfo)
 import EVM.RLP (rlpdecode)
 import qualified EVM.Patricia as Patricia
 import Data.Map (Map)
@@ -466,6 +466,7 @@ getSrcInfo cmd =
 -- If function signatures are known, they should always be given for best results.
 assert :: Command Options.Unwrapped -> IO ()
 assert cmd = do
+  srcInfo <- getSrcInfo cmd
   let block'  = maybe EVM.Fetch.Latest EVM.Fetch.BlockNumber (block cmd)
       rpcinfo = (,) block' <$> rpc cmd
       treeShowing :: Tree BranchInfo -> Query ()
@@ -473,9 +474,11 @@ assert cmd = do
         when (showTree cmd) $ do
           consistentTree tree >>= \case
             Nothing -> io $ putStrLn "No consistent paths" -- unlikely
-            Just tree' -> io $ setLocaleEncoding utf8 >> putStrLn (showBranchTree tree')
+            Just tree' -> let
+              showBranch = showBranchInfoWithAbi srcInfo
+              renderTree' = renderTree showBranch showLeafInfo
+              in io $ setLocaleEncoding utf8 >> putStrLn (showTree' (renderTree' tree'))
 
-  srcInfo <- getSrcInfo cmd
   maybesig <- case sig cmd of
     Nothing ->
       return Nothing
@@ -795,10 +798,10 @@ symvmFromCommand cmd = do
     -- ConcreteS cannot (instead values can be fetched from rpc!)
     -- Initial defaults to 0 for uninitialized storage slots,
     -- whereas the values of SymbolicS are unconstrained.
-    Just InitialS  -> EVM.Symbolic <$> freshArray_ (Just 0)
+    Just InitialS  -> EVM.Symbolic [] <$> freshArray_ (Just 0)
     Just ConcreteS -> return (EVM.Concrete mempty)
-    Just SymbolicS -> EVM.Symbolic <$> freshArray_ Nothing
-    Nothing -> EVM.Symbolic <$> freshArray_ (if create cmd then (Just 0) else Nothing)
+    Just SymbolicS -> EVM.Symbolic [] <$> freshArray_ Nothing
+    Nothing -> EVM.Symbolic [] <$> freshArray_ (if create cmd then (Just 0) else Nothing)
 
   withCache <- io $ applyCache (state cmd, cache cmd)
 

@@ -6,8 +6,7 @@ module EVM.Fetch where
 
 import Prelude hiding (Word)
 
-import EVM.Types    (Addr, W256, hexText)
-import EVM.Concrete (Word, w256)
+import EVM.Types    (Addr, w256, W256, hexText, Word)
 import EVM.Symbolic (litWord)
 import EVM          (EVM, Contract, Block, initialContract, nonce, balance, external)
 import qualified EVM.FeeSchedule as FeeSchedule
@@ -183,16 +182,16 @@ oracle smtstate info ensureConsistency q = do
         Just x -> case model of
           EVM.ConcreteS -> return $ continue x
           EVM.InitialS  -> return $ continue $ x
-             & set EVM.storage (EVM.Symbolic $ SBV.sListArray 0 [])
+             & set EVM.storage (EVM.Symbolic [] $ SBV.sListArray 0 [])
           EVM.SymbolicS -> case smtstate of
             Nothing -> return (continue $ x
-                               & set EVM.storage (EVM.Symbolic $ SBV.sListArray 0 []))
+                               & set EVM.storage (EVM.Symbolic [] $ SBV.sListArray 0 []))
 
             Just state ->
               flip runReaderT state $ SBV.runQueryT $ do
                 store <- freshArray_ Nothing
                 return $ continue $ x
-                  & set EVM.storage (EVM.Symbolic store)
+                  & set EVM.storage (EVM.Symbolic [] store)
         Nothing -> error ("oracle error: " ++ show q)
 
     EVM.PleaseMakeUnique val pathconditions continue ->
