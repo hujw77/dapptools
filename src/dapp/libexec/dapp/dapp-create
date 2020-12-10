@@ -3,6 +3,9 @@
 ### Usage: dapp create <name>
 ### Add --verify and export your ETHERSCAN_API_KEY to auto-verify on Etherscan
 set -e
+
+if [ "$DAPP_VERBOSE" ]; then set -x; fi
+
 for i in "$@"; do
   case $i in
     --verify)
