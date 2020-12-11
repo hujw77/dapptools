@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.43.2 - 2020-12-10
+
+### Changed
+
+- The default smttimeout has been increased from 20s to 30s
+
+## 0.43.1 - 2020-12-10
+
+### Changed
+
+- Counterexamples from symbolic tests now show clearer failure reasons
+
+### Fixed
+
+- Symbolic tests now work with RPC
+- Branch selection is working again in the interactive debugger
+
 ## 0.43.0 - 2020-11-29
 
 ### Added
