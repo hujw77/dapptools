@@ -14,6 +14,7 @@ export DAPP_OUT=${DAPP_OUT-out}
 export DAPP_ABI_OUT=${DAPP_ABI_OUT-abi}
 export DAPP_JSON=${DAPP_JSON-${DAPP_OUT}/dapp.sol.json}
 export DAPP_ROOT=${DAPP_ROOT-.}
+export DAPP_FLAT=${DAPP_FLAT-flat}
 
 if ! [[ $DAPP_INIT ]]; then
   export DAPP_INIT=1

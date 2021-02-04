@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+### dapp-flat -- flat src code
+
+set -e
+
+cd "$DAPP_ROOT"
+(set -x; rm -rf "${DAPP_FLAT?}")
+mkdir -p "$DAPP_FLAT"
+
+(dapp build)
+
+find "$DAPP_SRC" -name '*.sol' | while read -r x; do
+  filename=$(basename -- "$x" .sol)
+  flat_file="${DAPP_FLAT}/${filename}.f.sol"
+  (set -x; hevm flatten --source-file "$x" --json-file "${DAPP_JSON}" >"$flat_file")
+done
