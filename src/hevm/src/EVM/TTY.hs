@@ -37,11 +37,9 @@ import Control.Monad.Trans.Reader
 import Control.Monad.State.Strict hiding (state)
 
 import Data.Aeson.Lens
-import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.Maybe (isJust, fromJust, fromMaybe)
 import Data.Map (Map, insert, lookupLT, singleton, filter)
-import Data.Monoid ((<>))
 import Data.Text (Text, pack)
 import Data.Text.Encoding (decodeUtf8)
 import Data.List (sort, find)
@@ -617,7 +615,7 @@ initialUiVmStateForTest
   -> IO UiVmState
 initialUiVmStateForTest opts@UnitTestOptions{..} (theContractName, theTestName) = do
   let state' = fromMaybe (error "Internal Error: missing smtState") smtState
-  symArgs <- flip runReaderT state' $ SBV.runQueryT $ symCalldata theTestName types []
+  (buf, len) <- flip runReaderT state' $ SBV.runQueryT $ symCalldata theTestName types []
   let script = do
         Stepper.evm . pushTrace . EntryTrace $
           "test " <> theTestName <> " (" <> theContractName <> ")"
@@ -633,7 +631,7 @@ initialUiVmStateForTest opts@UnitTestOptions{..} (theContractName, theTestName) 
             void (runUnitTest opts theTestName args)
           SymbolicTest _ -> do
             Stepper.evm $ modify symbolify
-            void (execSymTest opts theTestName (first SymbolicBuffer symArgs))
+            void (execSymTest opts theTestName (SymbolicBuffer buf, w256lit len)) -- S (Literal $ num len) (literal $ num len)))
   pure $ initUiVmState vm0 opts script
   where
     Just (test, types) = find (\(test',_) -> extractSig test' == theTestName) $ unitTestMethods testContract
@@ -724,22 +722,22 @@ drawVmBrowser ui =
                   , txt ("Storage: "  <> storageDisplay (view storage c))
                   ]
                 ]
-          Just solc ->
+          Just sol ->
             hBox
               [ borderWithLabel (txt "Contract information") . padBottom Max . padRight (Pad 2) $ vBox
-                  [ txt "Name: " <+> txt (contractNamePart (view contractName solc))
-                  , txt "File: " <+> txt (contractPathPart (view contractName solc))
+                  [ txt "Name: " <+> txt (contractNamePart (view contractName sol))
+                  , txt "File: " <+> txt (contractPathPart (view contractName sol))
                   , txt " "
                   , txt "Constructor inputs:"
-                  , vBox . flip map (view constructorInputs solc) $
+                  , vBox . flip map (view constructorInputs sol) $
                       \(name, abiType) -> txt ("  " <> name <> ": " <> abiTypeSolidity abiType)
                   , txt "Public methods:"
-                  , vBox . flip map (sort (Map.elems (view abiMap solc))) $
+                  , vBox . flip map (sort (Map.elems (view abiMap sol))) $
                       \method -> txt ("  " <> view methodSignature method)
                   , txt ("Storage:" <> storageDisplay (view storage c))
                   ]
               , borderWithLabel (txt "Storage slots") . padBottom Max . padRight Max $ vBox
-                  (map txt (storageLayout dapp' solc))
+                  (map txt (storageLayout dapp' sol))
               ]
       ]
   ]
@@ -860,25 +858,17 @@ currentSrcMap dapp vm =
     case preview (dappSolcByHash . ix h) dapp of
       Nothing ->
         Nothing
-      Just (Creation, solc) ->
-        preview (creationSrcmap . ix i) solc
-      Just (Runtime, solc) ->
-        preview (runtimeSrcmap . ix i) solc
-
-currentSolc :: DappInfo -> VM -> Maybe SolcContract
-currentSolc dapp vm =
-  let
-    Just this = currentContract vm
-    h = view codehash this
-  in
-    preview (dappSolcByHash . ix h . _2) dapp
+      Just (Creation, sol) ->
+        preview (creationSrcmap . ix i) sol
+      Just (Runtime, sol) ->
+        preview (runtimeSrcmap . ix i) sol
 
 drawStackPane :: UiVmState -> UiWidget
 drawStackPane ui =
   let
     gasText = showWordExact (view (uiVm . state . gas) ui)
     labelText = txt ("Gas available: " <> gasText <> "; stack:")
-    stackList = list StackPane (Vec.fromList $ zip [1..] (view (uiVm . state . stack) ui)) 2
+    stackList = list StackPane (Vec.fromList $ zip [(1 :: Int)..] (view (uiVm . state . stack) ui)) 2
   in hBorderWithLabel labelText <=>
     renderList
       (\_ (i, x@(S _ w)) ->
@@ -995,6 +985,8 @@ drawSolidityPane ui =
         Just rows ->
           let
             subrange = lineSubrange rows (srcMapOffset sm, srcMapLength sm)
+            fileName :: Maybe Text
+            fileName = preview (dappSources . sourceFiles . ix (srcMapFile sm) . _1) dapp'
             lineNo =
               (snd . fromJust $
                 (srcMapCodePos
@@ -1002,8 +994,7 @@ drawSolidityPane ui =
                  sm)) - 1
           in vBox
             [ hBorderWithLabel $
-                txt (maybe "<unknown>" contractPathPart
-                      (preview (_Just . contractName) (currentSolc dapp' vm)))
+                txt (fromMaybe "<unknown>" fileName)
                   <+> str (":" ++ show lineNo)
 
                   -- Show the AST node type if present

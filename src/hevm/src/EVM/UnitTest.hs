@@ -1,5 +1,6 @@
 {-# Language LambdaCase #-}
 {-# Language DataKinds #-}
+{-# Language ImplicitParams #-}
 
 module EVM.UnitTest where
 
@@ -35,7 +36,6 @@ import Control.Monad.Par.IO (runParIO)
 import qualified Data.ByteString.Lazy as BSLazy
 import qualified Data.SBV.Trans.Control as SBV (Query, getValue, resetAssertions)
 import qualified Data.SBV.Internals as SBV (State)
-import Data.Bifunctor     (first)
 import Data.Binary.Get    (runGet)
 import Data.ByteString    (ByteString)
 import Data.SBV    hiding (verbose)
@@ -45,10 +45,8 @@ import Data.Either        (isRight, lefts)
 import Data.Foldable      (toList)
 import Data.Map           (Map)
 import Data.Maybe         (fromMaybe, catMaybes, fromJust, isJust, fromMaybe, mapMaybe)
-import Data.Monoid        ((<>))
 import Data.Text          (isPrefixOf, stripSuffix, intercalate, Text, pack, unpack)
 import Data.Text.Encoding (encodeUtf8)
-import Data.Word          (Word32)
 import System.Environment (lookupEnv)
 import System.IO          (hFlush, stdout)
 
@@ -143,10 +141,9 @@ initializeUnitTest UnitTestOptions { .. } theContract = do
     -- call setUp(), if it exists, to initialize the test contract
     let theAbi = view abiMap theContract
         setUp  = abiKeccak (encodeUtf8 "setUp()")
-        cd     = abiMethod "setUp()" emptyAbi
 
     when (isJust (Map.lookup setUp theAbi)) $ do
-      makeTxCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
+      abiCall testParams "setUp()" emptyAbi
       popTrace
       pushTrace (EntryTrace "setUp()")
 
@@ -162,14 +159,13 @@ initializeUnitTest UnitTestOptions { .. } theContract = do
 runUnitTest :: UnitTestOptions -> ABIMethod -> AbiValue -> Stepper Bool
 runUnitTest a method args = do
   x <- execTest a method args
-  checkFailures a method args x
+  checkFailures a method x
 
 execTest :: UnitTestOptions -> ABIMethod -> AbiValue -> Stepper Bool
 execTest UnitTestOptions { .. } method args = do
   -- Set up the call to the test method
   Stepper.evm $ do
-    let cd = abiMethod method args
-    makeTxCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
+    abiCall testParams method args
     pushTrace (EntryTrace method)
   -- Try running the test method
   Stepper.execFully >>= \case
@@ -177,8 +173,8 @@ execTest UnitTestOptions { .. } method args = do
     Left e -> Stepper.evm (pushTrace (ErrorTrace e)) >> pure True
     _ -> pure False
 
-checkFailures :: UnitTestOptions -> ABIMethod -> AbiValue -> Bool -> Stepper Bool
-checkFailures UnitTestOptions { .. } method args bailed = do
+checkFailures :: UnitTestOptions -> ABIMethod -> Bool -> Stepper Bool
+checkFailures UnitTestOptions { .. } method bailed = do
    -- Decide whether the test is supposed to fail or succeed
   let shouldFail = "testFail" `isPrefixOf` method
   if bailed then
@@ -187,9 +183,8 @@ checkFailures UnitTestOptions { .. } method args bailed = do
     -- Ask whether any assertions failed
     Stepper.evm $ do
       popTrace
-      let cd = abiMethod "failed()" args
-      makeTxCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
-    res <- Stepper.execFully -- >>= \(ConcreteBuffer bs) -> (Stepper.decode AbiBoolType bs)
+      abiCall testParams "failed()" emptyAbi
+    res <- Stepper.execFully
     case res of
       Right (ConcreteBuffer r) ->
         let AbiBool failed = decodeAbiValue AbiBoolType (BSLazy.fromStrict r)
@@ -215,12 +210,12 @@ srcMapForOpLocation :: DappInfo -> OpLocation -> Maybe SrcMap
 srcMapForOpLocation dapp (OpLocation hash opIx) =
   case preview (dappSolcByHash . ix hash) dapp of
     Nothing -> Nothing
-    Just (codeType, solc) ->
+    Just (codeType, sol) ->
       let
         vec =
           case codeType of
-            Runtime  -> view runtimeSrcmap solc
-            Creation -> view creationSrcmap solc
+            Runtime  -> view runtimeSrcmap sol
+            Creation -> view creationSrcmap sol
       in
         preview (ix opIx) vec
 
@@ -451,7 +446,7 @@ runOne opts@UnitTestOptions{..} vm testName args = do
       vm
   (success, vm'') <-
     runStateT
-      (EVM.Stepper.interpret oracle (checkFailures opts testName args bailed)) vm'
+      (EVM.Stepper.interpret oracle (checkFailures opts testName bailed)) vm'
   if success
   then
      let gasSpent = num (testGasCall testParams) - view (state . gas) vm'
@@ -523,13 +518,18 @@ symRun :: UnitTestOptions -> VM -> Text -> [AbiType] -> SBV.Query (Text, Either 
 symRun opts@UnitTestOptions{..} concreteVm testName types = do
     SBV.resetAssertions
     let vm = symbolify concreteVm
-    cd <- first SymbolicBuffer <$> symCalldata testName types []
-    let shouldFail = "proveFail" `isPrefixOf` testName
+    (cd, cdlen) <- symCalldata testName types []
+    let cd' = (SymbolicBuffer cd, w256lit cdlen)
+        shouldFail = "proveFail" `isPrefixOf` testName
 
     -- get all posible postVMs for the test method
     allPaths <- fst <$> runStateT
-        (EVM.SymExec.interpret oracle maxIter (execSymTest opts testName cd)) vm
-    results <- forM allPaths $
+        (EVM.SymExec.interpret oracle maxIter (execSymTest opts testName cd')) vm
+    let consistentPaths = flip filter allPaths $
+          \(_, vm') -> case view result vm' of
+            Just (VMFailure DeadPath) -> False
+            _ -> True
+    results <- forM consistentPaths $
       -- If the vm execution succeeded, check if the vm is reachable,
       -- and if any ds-test assertions were triggered
       -- Report a failure depending on the prefix of the test name
@@ -538,21 +538,21 @@ symRun opts@UnitTestOptions{..} concreteVm testName types = do
       -- report a failure unless the test is supposed to fail.
 
       \(bailed, vm') -> do
+        let ?context = DappContext { _contextInfo = dapp, _contextEnv = vm ^?! EVM.env }
         SBV.resetAssertions
         constrain $ sAnd (fst <$> view EVM.constraints vm')
         unless bailed $
           case view result vm' of
             Just (VMSuccess (SymbolicBuffer buf)) ->
               constrain $ litBytes (encodeAbiValue $ AbiBool $ not shouldFail) .== buf
-            _ -> error "unexpected return value"
+            r -> error $ "unexpected return value: " ++ show r
         checkSat >>= \case
           Sat -> do
-            prettyCd <- prettyCalldata cd testName types
-            let explorationFailed = case (view result vm') of
+            prettyCd <- prettyCalldata cd' testName types
+            let explorationFailed = case view result vm' of
                   Just (VMFailure e) -> case e of
-                                          NotUnique -> True
+                                          NotUnique _ -> True
                                           UnexpectedSymbolicArg -> True
-                                          DeadPath -> True
                                           _ -> False
                   _ -> False
             return $
@@ -560,8 +560,7 @@ symRun opts@UnitTestOptions{..} concreteVm testName types = do
               then Right ()
               else Left (vm', prettyCd)
           Unsat -> return $ Right ()
-          Unk -> let out = vm' & set result (Just (VMFailure SMTTimeout))
-                 in  return $ Left (out, "unknown")
+          Unk -> return $ Left (vm', "unknown; query timeout")
           DSat _ -> error "Unexpected DSat"
 
     if null $ lefts results
@@ -580,7 +579,9 @@ symFailure UnitTestOptions {..} testName failures' = mconcat
   where
     showRes vm = let Just res = view result vm in
                  case res of
-                   VMFailure _ -> prettyvmresult res
+                   VMFailure _ ->
+                     let ?context = DappContext { _contextInfo = dapp, _contextEnv = vm ^?! EVM.env }
+                     in prettyvmresult res
                    VMSuccess _ -> if "proveFail" `isPrefixOf` testName
                                   then "Successful execution"
                                   else "Failed: DSTest Assertion Violation"
@@ -597,18 +598,15 @@ symFailure UnitTestOptions {..} testName failures' = mconcat
           _ -> ""
       ]
 
-prettyCalldata :: (Buffer, SWord 256) -> Text -> [AbiType]-> SBV.Query Text
-prettyCalldata (buffer, cdlen) sig types = do
+prettyCalldata :: (?context :: DappContext) => (Buffer, SymWord) -> Text -> [AbiType]-> SBV.Query Text
+prettyCalldata (buffer, S _ cdlen) sig types = do
   cdlen' <- num <$> SBV.getValue cdlen
-  calldatainput <- case buffer of
+  cd <- case buffer of
     SymbolicBuffer cd -> mapM (SBV.getValue . fromSized) (take cdlen' cd) <&> BS.pack
     ConcreteBuffer cd -> return $ BS.take cdlen' cd
-  pure $ (head (Text.splitOn "(" sig)) <>
-           (Text.pack $ show (decodeAbiValue
-                  (AbiTupleType (Vector.fromList types))
-                  (BSLazy.fromStrict (BS.drop 4 calldatainput))))
+  pure $ (head (Text.splitOn "(" sig)) <> showCall types (ConcreteBuffer cd)
 
-execSymTest :: UnitTestOptions -> ABIMethod -> (Buffer, SWord 256) -> Stepper (Bool, VM)
+execSymTest :: UnitTestOptions -> ABIMethod -> (Buffer, SymWord) -> Stepper (Bool, VM)
 execSymTest opts@UnitTestOptions{ .. } method cd = do
   -- Set up the call to the test method
   Stepper.evm $ do
@@ -629,8 +627,7 @@ checkSymFailures UnitTestOptions { .. } = do
   -- Ask whether any assertions failed
   Stepper.evm $ do
     popTrace
-    let cd = abiMethod "failed()" emptyAbi
-    makeTxCall testParams (ConcreteBuffer cd, literal . num . BS.length $ cd)
+    abiCall testParams "failed()" emptyAbi
   Stepper.runFully
 
 indentLines :: Int -> Text -> Text
@@ -640,7 +637,8 @@ indentLines n s =
 
 passOutput :: VM -> UnitTestOptions -> Text -> Text
 passOutput vm UnitTestOptions { .. } testName =
-  let v = fromMaybe 0 verbose
+  let ?context = DappContext { _contextInfo = dapp, _contextEnv = vm ^?! EVM.env }
+  in let v = fromMaybe 0 verbose
   in if (v > 1) then
     mconcat
       [ "Success: "
@@ -653,7 +651,9 @@ passOutput vm UnitTestOptions { .. } testName =
     else ""
 
 failOutput :: VM -> UnitTestOptions -> Text -> Text
-failOutput vm UnitTestOptions { .. } testName = mconcat
+failOutput vm UnitTestOptions { .. } testName =
+  let ?context = DappContext { _contextInfo = dapp, _contextEnv = vm ^?! EVM.env }
+  in mconcat
   [ "Failure: "
   , fromMaybe "" (stripSuffix "()" testName)
   , "\n"
@@ -664,7 +664,7 @@ failOutput vm UnitTestOptions { .. } testName = mconcat
   , "\n"
   ]
 
-formatTestLogs :: Map W256 Event -> Seq.Seq Log -> Text
+formatTestLogs :: (?context :: DappContext) => Map W256 Event -> Seq.Seq Log -> Text
 formatTestLogs events xs =
   case catMaybes (toList (fmap (formatTestLog events) xs)) of
     [] -> "\n"
@@ -673,7 +673,7 @@ formatTestLogs events xs =
 -- Here we catch and render some special logs emitted by ds-test,
 -- with the intent to then present them in a separate view to the
 -- regular trace output.
-formatTestLog :: Map W256 Event -> Log -> Maybe Text
+formatTestLog :: (?context :: DappContext) => Map W256 Event -> Log -> Maybe Text
 formatTestLog _ (Log _ _ []) = Nothing
 formatTestLog events (Log _ args (topic:_)) =
   case maybeLitWord topic >>= \t1 -> (Map.lookup (wordValue t1) events) of
@@ -736,7 +736,13 @@ formatTestLog events (Log _ args (topic:_)) =
 word32Bytes :: Word32 -> ByteString
 word32Bytes x = BS.pack [byteAt x (3 - i) | i <- [0..3]]
 
-makeTxCall :: TestVMParams -> (Buffer, SWord 256) -> EVM ()
+abiCall :: TestVMParams -> Text -> AbiValue -> EVM ()
+abiCall params sig args =
+  let cd = abiMethod sig args
+      l = num . BS.length $ cd
+  in makeTxCall params (ConcreteBuffer cd, litWord l)
+
+makeTxCall :: TestVMParams -> (Buffer, SymWord) -> EVM ()
 makeTxCall TestVMParams{..} cd = do
   resetState
   assign (tx . isCreate) False
@@ -755,7 +761,7 @@ initialUnitTestVm (UnitTestOptions {..}) theContract =
   let
     TestVMParams {..} = testParams
     vm = makeVm $ VMOpts
-           { vmoptContract = initialContract (InitCode (view creationCode theContract))
+           { vmoptContract = initialContract (InitCode (ConcreteBuffer (view creationCode theContract)))
            , vmoptCalldata = (mempty, 0)
            , vmoptValue = 0
            , vmoptAddress = testAddress

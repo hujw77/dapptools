@@ -6,13 +6,12 @@ module EVM.Concrete where
 import Prelude hiding (Word)
 
 import EVM.RLP
-import EVM.Types (w256, Addr, W256 (..), num, word, padRight, word160Bytes, word256Bytes, keccak, Whiff(..), Word(..))
+import EVM.Types
 
 import Control.Lens    ((^?), ix)
 import Data.Bits       (Bits (..), shiftL, shiftR)
 import Data.ByteString (ByteString)
 import Data.Maybe      (fromMaybe)
-import Data.Semigroup  ((<>))
 import Data.Word       (Word8)
 
 import qualified Data.ByteString as BS
@@ -66,8 +65,9 @@ readMemoryWord (C _ i) m =
     go !a (-1) = a
     go !a !n = go (a + shiftL (num $ readByteOrZero (num i + n) m)
                               (8 * (31 - n))) (n - 1)
+    w = go (0 :: W256) (31 :: Int)
   in {-# SCC "readMemoryWord" #-}
-    w256 $ go (0 :: W256) (31 :: Int)
+    C (Literal w) w
 
 readMemoryWord32 :: Word -> ByteString -> Word
 readMemoryWord32 (C _ i) m =
@@ -87,7 +87,7 @@ setMemoryByte (C _ i) x =
   writeMemory (BS.singleton x) 1 0 (num i)
 
 keccakBlob :: ByteString -> Word
-keccakBlob x = C (FromKeccak x) (keccak x)
+keccakBlob x = C (FromKeccak (ConcreteBuffer x)) (keccak x)
 
 -- Copied from the standard library just to get specialization.
 -- We also use bit operations instead of modulo and multiply.

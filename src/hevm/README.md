@@ -233,14 +233,6 @@ These environment variables can be used to control block parameters
 
 `hevm` is distributed as part of the [Dapp tools](https://github.com/dapphub/dapptools) suite.
 
-### Static binary
-
-If you don't want to compile anything, and you're on x86-64 Linux, you can download a static binary from the "Releases" tab on GitHub. If the static binary complains about a "terminfo" file, you have to set the `TERMINFO` environment variable; on Ubuntu, you should do
-
-    $ export TERMINFO=/lib/terminfo
-
-(Put that in your `~/.bashrc` for convenience.)
-
 ### Building with Stack or Cabal
 
 If you can't or won't use Nix, the easiest way especially if you don't have GHC (the Haskell compiler) installed already, is to use [Stack](https://docs.haskellstack.org/en/stable/README/), which can take care of installing GHC for you. These commands should work:
@@ -286,17 +278,23 @@ Since Hevm is an EVM implementation mainly dedicated to testing and exploration,
 These can be accessed by calling into a contract (typically called `Hevm`) at address `0x7109709ECfa91a80626fF3989D68f67F5b1DD12D`, which implements the following methods:
 
 - `function warp(uint x) public`
-sets the block timestamp to `x`.
+Sets the block timestamp to `x`.
 
 - `function roll(uint x) public`
-sets the block number to `x`.
+Sets the block number to `x`.
 
 - `function store(address c, bytes32 loc, bytes32 val) public`
-sets the slot `loc` of contract `c` to `val`.
+Sets the slot `loc` of contract `c` to `val`.
 
-- `function load(address c, bytes32 loc) public`
-reads the slot `loc` of contract `c`.
+- `function load(address c, bytes32 loc) public returns (bytes32 val)`
+Reads the slot `loc` of contract `c`.
 
+- `function sign(uint sk, bytes32 digest) public returns (uint8 v, bytes32 r, bytes32 s)`
+Signs the `digest` using the private key `sk`. Note that signatures produced via `hevm.sign` will leak the private key.
+
+- `function addr(uint sk) public returns (address addr)`
+Derives an ethereum address from the private key `sk`. Note that `hevm.addr(0)` will fail with
+`BadCheatCode` as `0` is an invalid ECDSA private key.
 
 ## Contact
 

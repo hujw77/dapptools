@@ -1,11 +1,12 @@
 {-# Language DataKinds #-}
+{-# Language ImplicitParams #-}
 {-# Language TemplateHaskell #-}
 module EVM.Format where
 
 import Prelude hiding (Word)
-import Numeric
 import qualified EVM
 import EVM.Dapp (DappInfo (..), dappSolcByHash, dappAbiMap, showTraceLocation, dappEventMap)
+import EVM.Dapp (DappContext (..), contextInfo, contextEnv)
 import EVM.Concrete ( wordValue )
 import EVM (VM, VMResult(..), cheatCode, traceForest, traceData, Error (..), result)
 import EVM (Trace, TraceData (..), Log (..), Query (..), FrameContext (..), Storage(..))
@@ -15,7 +16,7 @@ import EVM.Types (maybeLitWord, Word (..), Whiff(..), SymWord(..), W256 (..), nu
 import EVM.Types (Addr, Buffer(..), ByteStringS(..))
 import EVM.ABI (AbiValue (..), Event (..), AbiType (..))
 import EVM.ABI (Indexed (NotIndexed), getAbiSeq)
-import EVM.ABI (parseTypeName)
+import EVM.ABI (parseTypeName, formatString)
 import EVM.Solidity (SolcContract(..), contractName, abiMap)
 import EVM.Solidity (methodOutput, methodSignature, methodName)
 
@@ -79,32 +80,29 @@ humanizeInteger =
   . Text.pack
   . show
 
-showAbiValue :: AbiValue -> Text
-showAbiValue (AbiUInt _ w) =
-  pack $ show w
-showAbiValue (AbiInt _ w) =
-  pack $ show w
-showAbiValue (AbiBool b) =
-  pack $ show b
-showAbiValue (AbiAddress w160) =
-  pack $ "0x" ++ (showHex w160 "")
+showAbiValue :: (?context :: DappContext) => AbiValue -> Text
 showAbiValue (AbiBytes _ bs) =
   formatBytes bs  -- opportunistically decodes recognisable strings
-showAbiValue (AbiBytesDynamic bs) =
-  formatBinary bs
-showAbiValue (AbiString bs) =
-  formatString bs
-showAbiValue (AbiArray _ _ xs) =
-  showAbiArray xs
-showAbiValue (AbiArrayDynamic _ xs) =
-  showAbiArray xs
-showAbiValue (AbiTuple v) =
-  showAbiValues v
+showAbiValue (AbiAddress addr) =
+  let dappinfo = view contextInfo ?context
+      contracts = view (contextEnv . EVM.contracts) ?context
+      name = case (Map.lookup addr contracts) of
+        Nothing -> ""
+        Just contract ->
+          let hash = view EVM.codehash contract
+              solcContract = (preview (dappSolcByHash . ix hash . _2) dappinfo)
+          in maybeContractName' solcContract
+  in
+    name <> "@" <> (pack $ show addr)
+showAbiValue v = pack $ show v
 
-textAbiValues :: Vector AbiValue -> [Text]
+showAbiValues :: (?context :: DappContext) => Vector AbiValue -> Text
+showAbiValues vs = parenthesise (textAbiValues vs)
+
+textAbiValues :: (?context :: DappContext) => Vector AbiValue -> [Text]
 textAbiValues vs = toList (fmap showAbiValue vs)
 
-textValues :: [AbiType] -> Buffer -> [Text]
+textValues :: (?context :: DappContext) => [AbiType] -> Buffer -> [Text]
 textValues ts (SymbolicBuffer  _) = [pack $ show t | t <- ts]
 textValues ts (ConcreteBuffer bs) =
   case runGetOrFail (getAbiSeq (length ts) ts) (fromStrict bs) of
@@ -114,25 +112,17 @@ textValues ts (ConcreteBuffer bs) =
 parenthesise :: [Text] -> Text
 parenthesise ts = "(" <> intercalate ", " ts <> ")"
 
--- TODO: make polymorphic
-showAbiValues :: Vector AbiValue -> Text
-showAbiValues vs = parenthesise (textAbiValues vs)
-
-showAbiArray :: Vector AbiValue -> Text
-showAbiArray vs =
-  "[" <> intercalate ", " (toList (fmap showAbiValue vs)) <> "]"
-
-showValues :: [AbiType] -> Buffer -> Text
+showValues :: (?context :: DappContext) => [AbiType] -> Buffer -> Text
 showValues ts b = parenthesise $ textValues ts b
 
-showValue :: AbiType -> Buffer -> Text
+showValue :: (?context :: DappContext) => AbiType -> Buffer -> Text
 showValue t b = head $ textValues [t] b
 
-showCall :: [AbiType] -> Buffer -> Text
+showCall :: (?context :: DappContext) => [AbiType] -> Buffer -> Text
 showCall ts (SymbolicBuffer bs) = showValues ts $ SymbolicBuffer (drop 4 bs)
 showCall ts (ConcreteBuffer bs) = showValues ts $ ConcreteBuffer (BS.drop 4 bs)
 
-showError :: ByteString -> Text
+showError :: (?context :: DappContext) => ByteString -> Text
 showError bs = case BS.take 4 bs of
   -- Method ID for Error(string)
   "\b\195y\160" -> showCall [AbiStringType] (ConcreteBuffer bs)
@@ -159,19 +149,13 @@ formatSBytes :: Buffer -> Text
 formatSBytes (SymbolicBuffer b) = "<" <> pack (show (length b)) <> " symbolic bytes>"
 formatSBytes (ConcreteBuffer b) = formatBytes b
 
-formatString :: ByteString -> Text
-formatString bs =
-  case decodeUtf8' (fst (BS.spanEnd (== 0) bs)) of
-    Right s -> mconcat ["\"", s, "\""]
-    Left _ -> "❮utf8 decode failed❯: " <> formatBinary bs
-
 -- a string that came from bytes, displayed with special quotes
 formatBString :: ByteString -> Text
-formatBString b = mconcat [ "«",  Text.dropAround (=='"') (formatString b), "»" ]
+formatBString b = mconcat [ "«",  Text.dropAround (=='"') (pack $ formatString b), "»" ]
 
 formatSString :: Buffer -> Text
 formatSString (SymbolicBuffer bs) = "<" <> pack (show (length bs)) <> " symbolic bytes (string)>"
-formatSString (ConcreteBuffer bs) = formatString bs
+formatSString (ConcreteBuffer bs) = pack $ formatString bs
 
 formatBinary :: ByteString -> Text
 formatBinary =
@@ -182,18 +166,18 @@ formatSBinary (SymbolicBuffer bs) = "<" <> pack (show (length bs)) <> " symbolic
 formatSBinary (ConcreteBuffer bs) = formatBinary bs
 
 showTraceTree :: DappInfo -> VM -> Text
-showTraceTree dapp =
-  traceForest
-    >>> fmap (fmap (unpack . showTrace dapp))
-    >>> concatMap showTree
-    >>> pack
+showTraceTree dapp vm =
+  let forest = traceForest vm
+      traces = fmap (fmap (unpack . showTrace dapp vm)) forest
+  in pack $ concatMap showTree traces
 
 unindexed :: [(AbiType, Indexed)] -> [AbiType]
 unindexed ts = [t | (t, NotIndexed) <- ts]
 
-showTrace :: DappInfo -> Trace -> Text
-showTrace dapp trace =
-  let
+showTrace :: DappInfo -> VM -> Trace -> Text
+showTrace dapp vm trace =
+  let ?context = DappContext { _contextInfo = dapp, _contextEnv = vm ^?! EVM.env }
+  in let
     pos =
       case showTraceLocation dapp trace of
         Left x -> " \x1b[1m" <> x <> "\x1b[0m"
@@ -343,6 +327,10 @@ maybeContractName :: Maybe SolcContract -> Text
 maybeContractName =
   maybe "<unknown contract>" (view (contractName . to contractNamePart))
 
+maybeContractName' :: Maybe SolcContract -> Text
+maybeContractName' =
+  maybe "" (view (contractName . to contractNamePart))
+
 maybeAbiName :: SolcContract -> Word -> Maybe Text
 maybeAbiName solc abi = preview (abiMap . ix (fromIntegral abi) . methodSignature) solc
 
@@ -352,7 +340,7 @@ contractNamePart x = Text.split (== ':') x !! 1
 contractPathPart :: Text -> Text
 contractPathPart x = Text.split (== ':') x !! 0
 
-prettyvmresult :: VMResult -> String
+prettyvmresult :: (?context :: DappContext) => VMResult -> String
 prettyvmresult (EVM.VMFailure (EVM.Revert ""))  = "Revert"
 prettyvmresult (EVM.VMFailure (EVM.Revert msg)) = "Revert" ++ (unpack $ showError msg)
 prettyvmresult (EVM.VMFailure (EVM.UnrecognizedOpcode 254)) = "Assertion violation"
@@ -363,7 +351,6 @@ prettyvmresult (EVM.VMSuccess (ConcreteBuffer msg)) =
   else "Return: " <> show (ByteStringS msg)
 prettyvmresult (EVM.VMSuccess (SymbolicBuffer msg)) =
   "Return: " <> show (length msg) <> " symbolic bytes"
-
 
 currentSolc :: DappInfo -> VM -> Maybe SolcContract
 currentSolc dapp vm =
@@ -432,8 +419,10 @@ showTree' (Node _ children) =
 showStorage :: [(SymWord, SymWord)] -> [String]
 showStorage = fmap (\(k, v) -> show k <> " => " <> show v)
 
-showLeafInfo :: BranchInfo -> [String]
-showLeafInfo (BranchInfo vm _) = let
+showLeafInfo :: DappInfo -> BranchInfo -> [String]
+showLeafInfo srcInfo (BranchInfo vm _) = let
+  ?context = DappContext { _contextInfo = srcInfo, _contextEnv = vm ^?! EVM.env }
+  in let
   self    = view (EVM.state . EVM.contract) vm
   updates = case view (EVM.env . EVM.contracts) vm ^?! ix self . EVM.storage of
     Symbolic v _ -> v
@@ -447,10 +436,10 @@ showBranchInfoWithAbi :: DappInfo -> BranchInfo -> [String]
 showBranchInfoWithAbi _ (BranchInfo _ Nothing) = [""]
 showBranchInfoWithAbi srcInfo (BranchInfo vm (Just y)) =
   case y of
-    (UnOp "isZero" (InfixBinOp "==" (Val x) _)) ->
+    (IsZero (Eq (Literal x) _)) ->
       let
         abimap = view abiMap <$> currentSolc srcInfo vm
-        method = abimap >>= Map.lookup (read x)
+        method = abimap >>= Map.lookup (num x)
       in [maybe (show y) (show . view methodSignature) method]
     y' -> [show y']
 

@@ -17,7 +17,7 @@ import EVM.Stepper (Stepper)
 import qualified EVM.Stepper as Stepper
 import qualified Control.Monad.Operational as Operational
 import Control.Monad.State.Strict hiding (state)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import EVM.Types
 import EVM.Concrete (createAddress)
 import qualified EVM.FeeSchedule as FeeSchedule
@@ -43,26 +43,34 @@ sbytes256 = liftA2 (++) sbytes128 sbytes128
 sbytes512 = liftA2 (++) sbytes256 sbytes256
 sbytes1024 = liftA2 (++) sbytes512 sbytes512
 
+mkByte :: Query [SWord 8]
+mkByte = do x <- freshVar_
+            return [x]
+
 -- | Abstract calldata argument generation
--- We don't assume input types are restricted to their proper range here;
--- such assumptions should instead be given as preconditions.
--- This could catch some interesting calldata mismanagement errors.
-symAbiArg :: AbiType -> Query ([SWord 8], SWord 256)
-symAbiArg (AbiUIntType n) | n `mod` 8 == 0 && n <= 256 = do x <- sbytes32
-                                                            return (x, 32)
+symAbiArg :: AbiType -> Query ([SWord 8], W256)
+symAbiArg (AbiUIntType n) | n `mod` 8 == 0 && n <= 256 =
+  do x <- concatMapM (const mkByte) [0..(n `div` 8) - 1]
+     return (padLeft' 32 x, 32)
                           | otherwise = error "bad type"
 
-symAbiArg (AbiIntType n)  | n `mod` 8 == 0 && n <= 256 = do x <- sbytes32
-                                                            return (x, 32)
+symAbiArg (AbiIntType n)  | n `mod` 8 == 0 && n <= 256 =
+  do x <- concatMapM (const mkByte) [(0 :: Int) ..(n `div` 8) - 1]
+     return (padLeft' 32 x, 32)
+
                           | otherwise = error "bad type"
-symAbiArg AbiBoolType = do x <- sbytes32
-                           return (x, 32)
+symAbiArg AbiBoolType =
+  do x <- mkByte
+     return (padLeft' 32 x, 32)
 
-symAbiArg AbiAddressType = do x <- sbytes32
-                              return (x, 32)
+symAbiArg AbiAddressType =
+  do x <- concatMapM (const mkByte) [(0 :: Int)..19]
+     return (padLeft' 32 x, 32)
 
-symAbiArg (AbiBytesType n) | n <= 32 = do x <- sbytes32
-                                          return (x, 32)
+symAbiArg (AbiBytesType n) | n <= 32 =
+  do x <- concatMapM (const mkByte) [0..n - 1]
+     return (padLeft' 32 x, 32)
+
                            | otherwise = error "bad type"
 
 -- TODO: is this encoding correct?
@@ -83,7 +91,7 @@ symAbiArg n =
 -- with concrete arguments.
 -- Any argument given as "<symbolic>" or omitted at the tail of the list are
 -- kept symbolic.
-symCalldata :: Text -> [AbiType] -> [String] -> Query ([SWord 8], SWord 256)
+symCalldata :: Text -> [AbiType] -> [String] -> Query ([SWord 8], W256)
 symCalldata sig typesignature concreteArgs =
   let args = concreteArgs <> replicate (length typesignature - length concreteArgs)  "<symbolic>"
       mkArg typ "<symbolic>" = symAbiArg typ
@@ -99,18 +107,18 @@ abstractVM typesignature concreteArgs x storagemodel = do
     case typesignature of
       Nothing -> do cd <- sbytes256
                     len <- freshVar_
-                    return (cd, len, (len .<= 256, Val "calldatalength < 256"))
+                    return (cd, var "calldataLength" len, (len .<= 256, Todo "calldatalength < 256" []))
       Just (name, typs) -> do (cd, cdlen) <- symCalldata name typs concreteArgs
-                              return (cd, cdlen, (sTrue, Val "True"))
+                              return (cd, S (Literal cdlen) (literal $ num cdlen), (sTrue, Todo "Trivial" []))
   symstore <- case storagemodel of
     SymbolicS -> Symbolic [] <$> freshArray_ Nothing
     InitialS -> Symbolic [] <$> freshArray_ (Just 0)
     ConcreteS -> return $ Concrete mempty
   c <- SAddr <$> freshVar_
-  value' <- sw256 <$> freshVar_
-  return $ loadSymVM (RuntimeCode x) symstore storagemodel c value' (SymbolicBuffer cd', cdlen) & over constraints ((<>) [cdconstraint])
+  value' <- var "CALLVALUE" <$> freshVar_
+  return $ loadSymVM (RuntimeCode (ConcreteBuffer x)) symstore storagemodel c value' (SymbolicBuffer cd', cdlen) & over constraints ((<>) [cdconstraint])
 
-loadSymVM :: ContractCode -> Storage -> StorageModel -> SAddr -> SymWord -> (Buffer, SWord 256) -> VM
+loadSymVM :: ContractCode -> Storage -> StorageModel -> SAddr -> SymWord -> (Buffer, SymWord) -> VM
 loadSymVM x initStore model addr callvalue' calldata' =
     (makeVm $ VMOpts
     { vmoptContract = contractWithStore x initStore
@@ -154,10 +162,12 @@ interpret' fetcher maxIter vm = let
 
     Just (VMFailure (EVM.Query q@(PleaseAskSMT _ _ continue))) -> let
       codelocation = getCodeLocation vm
-      location = view (iterations . at codelocation) vm
-      in case location of
-        Nothing -> cont $ continue EVM.Unknown
-        Just _ -> io (fetcher q) >>= cont
+      iteration = num $ fromMaybe 0 $ view (iterations . at codelocation) vm
+      -- as an optimization, we skip consulting smt
+      -- if we've been at the location less than 5 times
+      in if iteration < (max (fromMaybe 0 maxIter) 5)
+         then cont $ continue EVM.Unknown
+         else io (fetcher q) >>= cont
 
     Just (VMFailure (EVM.Query q)) -> io (fetcher q) >>= cont
 
@@ -207,31 +217,35 @@ interpret fetcher maxIter =
         Stepper.Ask (EVM.PleaseChoosePath _ continue) -> do
           vm <- get
           case maxIterationsReached vm maxIter of
-            Nothing -> do push 1
-                          a <- interpret fetcher maxIter (Stepper.evm (continue True) >>= k)
-                          put vm
-                          pop 1
-                          push 1
-                          b <- interpret fetcher maxIter (Stepper.evm (continue False) >>= k)
-                          pop 1
-                          return $ a <> b
-            Just n -> interpret fetcher maxIter (Stepper.evm (continue (not n)) >>= k)
+            Nothing -> do
+              push 1
+              a <- interpret fetcher maxIter (Stepper.evm (continue True) >>= k)
+              put vm
+              pop 1
+              push 1
+              b <- interpret fetcher maxIter (Stepper.evm (continue False) >>= k)
+              pop 1
+              return $ a <> b
+            Just n ->
+              interpret fetcher maxIter (Stepper.evm (continue (not n)) >>= k)
         Stepper.Wait q -> do
-          let performQuery =
-                do m <- liftIO (fetcher q)
-                   interpret fetcher maxIter (Stepper.evm m >>= k)
+          let performQuery = do
+                m <- liftIO (fetcher q)
+                interpret fetcher maxIter (Stepper.evm m >>= k)
 
           case q of
             PleaseAskSMT _ _ continue -> do
               codelocation <- getCodeLocation <$> get
-              iters <- use (iterations . at codelocation)
-              case iters of
-                -- if this is the first time we are branching at this point,
-                -- explore both branches without consulting SMT.
-                -- Exploring too many branches is a lot cheaper than
-                -- consulting our SMT solver.
-                Nothing -> interpret fetcher maxIter (Stepper.evm (continue EVM.Unknown) >>= k)
-                _ -> performQuery
+              iteration <- num <$> fromMaybe 0 <$> use (iterations . at codelocation)
+
+              -- if this is the first time we are branching at this point,
+              -- explore both branches without consulting SMT.
+              -- Exploring too many branches is a lot cheaper than
+              -- consulting our SMT solver.
+              if iteration < (max (fromMaybe 0 maxIter) 5)
+              then interpret fetcher maxIter (Stepper.evm (continue EVM.Unknown) >>= k)
+              else performQuery
+
             _ -> performQuery
 
         Stepper.EVM m ->
@@ -261,7 +275,7 @@ verifyContract :: ByteString -> Maybe (Text, [AbiType]) -> [String] -> StorageMo
 verifyContract theCode signature' concreteArgs storagemodel pre maybepost = do
     preStateRaw <- abstractVM signature' concreteArgs theCode  storagemodel
     -- add the pre condition to the pathconditions to ensure that we are only exploring valid paths
-    let preState = over constraints ((++) [(pre preStateRaw, Dull)]) preStateRaw
+    let preState = over constraints ((++) [(pre preStateRaw, Todo "assumptions" [])]) preStateRaw
     v <- verify preState Nothing Nothing maybepost
     return (v, preState)
 
@@ -279,6 +293,7 @@ consistentPath vm = do
     Sat -> return $ Just vm
     Unk -> return $ Just vm -- the path may still be consistent
     Unsat -> return Nothing
+    DSat _ -> error "unexpected DSAT"
 
 consistentTree :: Tree BranchInfo -> Query (Maybe (Tree BranchInfo))
 consistentTree (Node (BranchInfo vm w) []) = do
@@ -320,6 +335,7 @@ verify preState maxIter rpcinfo maybepost = do
         Unsat -> do io $ putStrLn "Q.E.D."
                     return $ Left tree
         Sat -> return $ Right tree
+        DSat _ -> error "unexpected DSAT"
 
     Nothing -> do io $ putStrLn "Nothing to check"
                   return $ Left tree
@@ -335,7 +351,7 @@ equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
       prestorage = preStateA ^?! env . contracts . ix preself . storage
       (calldata', cdlen) = view (state . calldata) preStateA
       pathconds = view constraints preStateA
-      preStateB = loadSymVM (RuntimeCode bytecodeB) prestorage SymbolicS precaller callvalue' (calldata', cdlen) & set constraints pathconds
+      preStateB = loadSymVM (RuntimeCode (ConcreteBuffer bytecodeB)) prestorage SymbolicS precaller callvalue' (calldata', cdlen) & set constraints pathconds
 
   smtState <- queryState
   push 1
@@ -378,20 +394,21 @@ equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
      Unk -> error "solver said unknown!"
      Sat -> return $ Right preStateA
      Unsat -> return $ Left (leaves aVMs, leaves bVMs)
+     DSat _ -> error "unexpected DSAT"
 
 both' :: (a -> b) -> (a, a) -> (b, b)
 both' f (x, y) = (f x, f y)
 
 showCounterexample :: VM -> Maybe (Text, [AbiType]) -> Query ()
 showCounterexample vm maybesig = do
-  let (calldata', cdlen) = view (EVM.state . EVM.calldata) vm
+  let (calldata', S _ cdlen) = view (EVM.state . EVM.calldata) vm
       S _ cvalue = view (EVM.state . EVM.callvalue) vm
       SAddr caller' = view (EVM.state . EVM.caller) vm
   cdlen' <- num <$> getValue cdlen
   calldatainput <- case calldata' of
     SymbolicBuffer cd -> mapM (getValue.fromSized) (take cdlen' cd) >>= return . pack
     ConcreteBuffer cd -> return $ BS.take cdlen' cd
-  callvalue' <- num <$> getValue cvalue
+  callvalue' <- getValue cvalue
   caller'' <- num <$> getValue caller'
   io $ do
     putStrLn "Calldata:"

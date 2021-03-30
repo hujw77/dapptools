@@ -2,8 +2,16 @@ pragma solidity ^0.6.7;
 
 import "ds-test/test.sol";
 import "ds-token/token.sol";
+import "ds-math/math.sol";
 
-contract SolidityTest is DSTest {
+contract ConstructorArg {
+    address immutable public a;
+    constructor(address _a) public {
+        a = _a;
+    }
+}
+
+contract SolidityTest is DSTest, DSMath {
     DSToken token;
 
     function setUp() public {
@@ -25,6 +33,11 @@ contract SolidityTest is DSTest {
         token.mint(supply);
         uint actual = token.totalSupply();
         assertEq(supply, actual);
+    }
+
+    function prove_constructorArgs(address b) public {
+        ConstructorArg c = new ConstructorArg(b);
+        assertEq(b, c.a());
     }
 
     function proveFail_revertSmoke() public {
@@ -59,6 +72,15 @@ contract SolidityTest is DSTest {
         assertEq(supply - amt, token.totalSupply());
     }
 
+    function prove_mul(uint128 x, uint128 y) public {
+        mul(x,y);
+    }
+
+    function prove_distributivity(uint120 x, uint120 y, uint120 z) public {
+        assertEq(mul(x, add(y, z)), add(mul(x, y), mul(x, z)));
+    }
+
+
     function prove_loop(uint n) public {
         uint counter = 0;
         for (uint i = 0; i < n; i++) {
@@ -67,4 +89,3 @@ contract SolidityTest is DSTest {
         assertTrue(counter < 100);
     }
 }
-
