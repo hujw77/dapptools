@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+### token-mint -- mint tokens to caller
+### Usage: token mint <token> <amount>
+set -e
+[ $# = 2 ] || token mint --usage
+sig="mint(uint256)"
+seth send "$1" "$sig" "$2"
