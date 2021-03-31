@@ -210,6 +210,9 @@ if [[ $SETH_CHAIN ]]; then
     pangolin)
       eth_rpc_url=https://pangolin-rpc.darwinia.network
       ;;
+    heco-test)
+      eth_rpc_url=https://http-testnet.hecochain.com
+      ;;
     *)
       echo >&2 "${0##*/}: error: unknown chain: \\'$SETH_CHAIN'"
       exit 1
