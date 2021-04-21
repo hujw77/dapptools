@@ -2,12 +2,13 @@
 
 buildGoModule rec {
   name = "ethsign-${version}";
-  version = "0.16.0.darwinia";
+  version = "0.16.2";
 
   src = ./.;
 
-  modSha256 = "099hf9518zqgsjv050qlxj3la9f66j8bbbafh8vgivrw5vd81m60";
-  
+  vendorSha256 = "1p7gkpv88v6swz8dpjvrzfaa2jkpr5xw26bd3rjazv5wcs6ipwy7";
+  runVend = true;
+
   meta = with stdenv.lib; {
     homepage = http://github.com/dapphub/dapptools;
     description = "Make raw signed Ethereum transactions";

@@ -15,14 +15,14 @@ module Main where
 import EVM (StorageModel(..))
 import qualified EVM
 import EVM.Concrete (createAddress,  wordValue)
-import EVM.Symbolic (forceLitBytes, litAddr, w256lit, len, forceLit)
+import EVM.Symbolic (litWord, forceLitBytes, litAddr, len, forceLit)
 import qualified EVM.FeeSchedule as FeeSchedule
 import qualified EVM.Fetch
 import qualified EVM.Flatten
 import qualified EVM.Stepper
 import qualified EVM.TTY
 import qualified EVM.Emacs
-import EVM.Dev (concatMapM, interpretWithTrace)
+import EVM.Dev (interpretWithTrace)
 
 #if MIN_VERSION_aeson(1, 0, 0)
 import qualified EVM.VMTest as VMTest
@@ -47,6 +47,7 @@ import qualified EVM.Facts.Git as Git
 import qualified EVM.UnitTest
 
 import GHC.IO.Encoding
+import GHC.Stack
 import Control.Concurrent.Async   (async, waitCatch)
 import Control.Lens hiding (pre, passing)
 import Control.Monad              (void, when, forM_, unless)
@@ -54,14 +55,14 @@ import Control.Monad.State.Strict (execStateT, liftIO)
 import Data.ByteString            (ByteString)
 import Data.List                  (intercalate, isSuffixOf)
 import Data.Tree
-import Data.Text                  (Text, unpack, pack)
+import Data.Text                  (unpack, pack)
 import Data.Text.Encoding         (encodeUtf8)
 import Data.Text.IO               (hPutStr)
 import Data.Maybe                 (fromMaybe, fromJust)
 import Data.Version               (showVersion)
 import Data.SBV hiding (Word, solver, verbose, name)
 import Data.SBV.Control hiding (Version, timeout, create)
-import System.IO                  (hFlush, stdout, stderr, utf8)
+import System.IO                  (hFlush, stdout, stderr)
 import System.Directory           (withCurrentDirectory, listDirectory)
 import System.Exit                (exitFailure, exitWith, ExitCode(..))
 import System.Environment         (setEnv)
@@ -421,17 +422,19 @@ equivalence cmd =
 
 -- cvc4 sets timeout via a commandline option instead of smtlib `(set-option)`
 runSMTWithTimeOut :: Maybe Text -> Maybe Integer -> Bool -> Symbolic a -> IO a
-runSMTWithTimeOut solver maybeTimeout smtdebug sym
-  | solver == Just "cvc4" = do
-      setEnv "SBV_CVC4_OPTIONS" ("--lang=smt --incremental --interactive --no-interactive-prompt --model-witness-value --tlimit-per=" <> show timeout)
-      a <- runSMTWith cvc4{SBV.verbose=smtdebug} sym
-      setEnv "SBV_CVC4_OPTIONS" ""
-      return a
+runSMTWithTimeOut solver maybeTimeout smtdebug symb
+  | solver == Just "cvc4" = runwithcvc4
   | solver == Just "z3" = runwithz3
-  | solver == Nothing = runwithz3
+  | solver == Nothing = runwithcvc4
   | otherwise = error "Unknown solver. Currently supported solvers; z3, cvc4"
  where timeout = fromMaybe 30000 maybeTimeout
-       runwithz3 = runSMTWith z3{SBV.verbose=smtdebug} $ (setTimeOut timeout) >> sym
+       runwithz3 = runSMTWith z3{SBV.verbose=smtdebug} $ (setTimeOut timeout) >> symb
+       runwithcvc4 = do
+         setEnv "SBV_CVC4_OPTIONS" ("--lang=smt --incremental --interactive --no-interactive-prompt --model-witness-value --tlimit-per=" <> show timeout)
+         a <- runSMTWith cvc4{SBV.verbose=smtdebug} symb
+         setEnv "SBV_CVC4_OPTIONS" ""
+         return a
+
 
 
 checkForVMErrors :: [EVM.VM] -> [String]
@@ -476,7 +479,7 @@ assert cmd = do
             Nothing -> io $ putStrLn "No consistent paths" -- unlikely
             Just tree' -> let
               showBranch = showBranchInfoWithAbi srcInfo
-              renderTree' = renderTree showBranch showLeafInfo
+              renderTree' = renderTree showBranch (showLeafInfo srcInfo)
               in io $ setLocaleEncoding utf8 >> putStrLn (showTree' (renderTree' tree'))
 
   maybesig <- case sig cmd of
@@ -729,14 +732,14 @@ vmFromCommand cmd = do
         caller'  = addr caller 0
         origin'  = addr origin 0
         calldata' = ConcreteBuffer $ bytes calldata ""
-        codeType = if create cmd then EVM.InitCode else EVM.RuntimeCode
+        codeType = (if create cmd then EVM.InitCode else EVM.RuntimeCode) . ConcreteBuffer
         address' = if create cmd
-              then createAddress origin' (word nonce 0)
+              then addr address (createAddress origin' (word nonce 0))
               else addr address 0xacab
 
         vm0 miner ts blockNum diff c = EVM.makeVm $ EVM.VMOpts
           { EVM.vmoptContract      = c
-          , EVM.vmoptCalldata      = (calldata', literal . num $ len calldata')
+          , EVM.vmoptCalldata      = (calldata', litWord (num $ len calldata'))
           , EVM.vmoptValue         = w256lit value'
           , EVM.vmoptAddress       = address'
           , EVM.vmoptCaller        = litAddr caller'
@@ -772,24 +775,24 @@ symvmFromCommand cmd = do
                                    )
 
   caller' <- maybe (SAddr <$> freshVar_) (return . litAddr) (caller cmd)
-  ts <- maybe (S (Var "Timestamp") <$> freshVar_) (return . w256lit) (timestamp cmd)
-  callvalue' <- maybe ((S (Var "CallValue")) <$> freshVar_) (return . w256lit) (value cmd)
+  ts <- maybe (var "Timestamp" <$> freshVar_) (return . w256lit) (timestamp cmd)
+  callvalue' <- maybe (var "CallValue" <$> freshVar_) (return . w256lit) (value cmd)
   (calldata', cdlen, pathCond) <- case (calldata cmd, sig cmd) of
     -- fully abstract calldata (up to 256 bytes)
     (Nothing, Nothing) -> do
       cd <- sbytes256
       len' <- freshVar_
-      return (SymbolicBuffer cd, len', (len' .<= 256, Val "len < 256"))
+      return (SymbolicBuffer cd, var "CALLDATALENGTH" len', (len' .<= 256, Todo "len < 256" []))
     -- fully concrete calldata
     (Just c, Nothing) ->
       let cd = ConcreteBuffer $ decipher c
-      in return (cd, num (len cd), (sTrue, Dull))
+      in return (cd, litWord (num $ len cd), (sTrue, Todo "" []))
     -- calldata according to given abi with possible specializations from the `arg` list
     (Nothing, Just sig') -> do
       method' <- io $ functionAbi sig'
       let typs = snd <$> view methodInputs method'
       (cd, cdlen) <- symCalldata (view methodSignature method') typs (arg cmd)
-      return (SymbolicBuffer cd, cdlen, (sTrue, Dull))
+      return (SymbolicBuffer cd, litWord (num cdlen), (sTrue, Todo "" []))
 
     _ -> error "incompatible options: calldata and abi"
 
@@ -835,9 +838,9 @@ symvmFromCommand cmd = do
     decipher = hexByteString "bytes" . strip0x
     block'   = maybe EVM.Fetch.Latest EVM.Fetch.BlockNumber (block cmd)
     origin'  = addr origin 0
-    codeType = if create cmd then EVM.InitCode else EVM.RuntimeCode
+    codeType = (if create cmd then EVM.InitCode else EVM.RuntimeCode) . ConcreteBuffer
     address' = if create cmd
-          then createAddress origin' (word nonce 0)
+          then addr address (createAddress origin' (word nonce 0))
           else addr address 0xacab
     vm0 miner ts blockNum diff cdlen calldata' callvalue' caller' c = EVM.makeVm $ EVM.VMOpts
       { EVM.vmoptContract      = c
@@ -863,7 +866,7 @@ symvmFromCommand cmd = do
     word f def = fromMaybe def (f cmd)
     addr f def = fromMaybe def (f cmd)
 
-launchTest :: Command Options.Unwrapped ->  IO ()
+launchTest :: HasCallStack => Command Options.Unwrapped ->  IO ()
 launchTest cmd = do
 #if MIN_VERSION_aeson(1, 0, 0)
   parsed <- VMTest.parseBCSuite <$> LazyByteString.readFile (file cmd)
@@ -883,7 +886,7 @@ launchTest cmd = do
 #endif
 
 #if MIN_VERSION_aeson(1, 0, 0)
-runVMTest :: Bool -> Mode -> Maybe Int -> (String, VMTest.Case) -> IO Bool
+runVMTest :: HasCallStack => Bool -> Mode -> Maybe Int -> (String, VMTest.Case) -> IO Bool
 runVMTest diffmode mode timelimit (name, x) =
  do
   let vm0 = VMTest.vmForCase x

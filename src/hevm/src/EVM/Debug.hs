@@ -3,6 +3,7 @@ module EVM.Debug where
 import EVM          (Contract, storage, nonce, balance, bytecode, codehash)
 import EVM.Solidity (SrcMap, srcMapFile, srcMapOffset, srcMapLength, SourceCache, sourceFiles)
 import EVM.Types    (Addr)
+import EVM.Symbolic (len)
 
 import Control.Arrow   (second)
 import Control.Lens
@@ -28,11 +29,10 @@ object xs =
 prettyContract :: Contract -> Doc
 prettyContract c =
   object
-    [ (text "codesize", int (ByteString.length (c ^. bytecode)))
+    [ (text "codesize", int (len (c ^. bytecode)))
     , (text "codehash", text (show (c ^. codehash)))
     , (text "balance", int (fromIntegral (c ^. balance)))
     , (text "nonce", int (fromIntegral (c ^. nonce)))
-    , (text "code", text (show (ByteString.take 16 (c ^. bytecode))))
     , (text "storage", text (show (c ^. storage)))
     ]
 
@@ -101,34 +101,6 @@ prettyContracts x =
 --     Just x -> Just x
 --     Nothing ->
 --       vm ^? env . solcByCreationHash . ix hash
-
--- currentSolc :: VM -> Maybe SolcContract
--- currentSolc vm =
---   let
---     c = vm ^?! env . contracts . ix (vm ^. state . contract)
---     theCodehash = view codehash c
---   in
---     case vm ^? env . solcByRuntimeHash . ix theCodehash of
---         Just x ->
---           Just x
---         Nothing ->
---           vm ^? env . solcByCreationHash . ix theCodehash
-
--- currentSrcMap :: VM -> Maybe SrcMap
--- currentSrcMap vm =
---   let
---     c = vm ^?! env . contracts . ix (vm ^. state . contract)
---     theOpIx = (c ^. opIxMap) Vector.! (vm ^. state . pc)
---     theCodehash = view codehash c
---     (isRuntime, solc) =
---       case vm ^? env . solcByRuntimeHash . ix theCodehash of
---         Just x ->
---           (True, Just x)
---         Nothing ->
---           (False, vm ^? env . solcByCreationHash . ix theCodehash)
---     srcmapLens = if isRuntime then runtimeSrcmap else creationSrcmap
---   in
---     join (fmap (preview (srcmapLens . ix theOpIx)) solc)
 
 srcMapCodePos :: SourceCache -> SrcMap -> Maybe (Text, Int)
 srcMapCodePos cache sm =

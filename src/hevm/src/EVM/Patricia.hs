@@ -5,14 +5,13 @@
 module EVM.Patricia where
 
 import EVM.RLP
-import EVM.Types
+import EVM.Types hiding (Literal)
 
 import Control.Monad.Free
 import Control.Monad.State
 import Data.ByteString (ByteString)
 import Data.Foldable (toList)
 import Data.List (stripPrefix)
-import Data.Monoid ((<>))
 import Data.Sequence (Seq)
 
 import qualified Data.ByteString as BS

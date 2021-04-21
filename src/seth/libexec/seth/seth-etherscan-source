@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-### seth-source -- fetch the contract source from etherscan
-### Usage: seth source <address> [<options>]
+### seth-etherscan-source -- fetch the contract source from etherscan
+### Usage: seth etherscan-source <address> [<options>]
 ###
-### Requires an etherscan api key
+### Requires an etherscan api key assigned to ETHERSCAN_API_KEY
 set -e
 
 if [ "$SETH_VERBOSE" ]; then set -x; fi
@@ -19,6 +19,8 @@ if [ "$SETH_VERBOSE" ]; then set -x; fi
   exit 1
 }
 
+[[ -z "$1" ]] && seth --fail-usage
+
 ADDR=$(seth --to-address "$1")
 
 chain=$(seth chain)
@@ -29,6 +31,12 @@ case "$chain" in
     ;;
   ropsten|kovan|rinkeby|goerli)
     URL="${ETHERSCAN_API_URL:+https://api-$chain.etherscan.io}"
+    ;;
+  bsctest)
+    URL="${ETHERSCAN_API_URL:-https://api-testnet.bscscan.com}"
+    ;;
+  bsc)
+    URL="${ETHERSCAN_API_URL:-https://api.bscscan.com}"
     ;;
   *)
     echo >&2 "Source fetching only works on mainnet, ropsten, kovan, rinkeby, and goerli."
