@@ -27,11 +27,11 @@ case $genesis in
     echo bsctest;;
   0x0d21840abff46b96c84b2ac9e10e4f5cdaeb5693cb665db62a2f3b02d2d57b5b)
     echo bsc;;
-  0x8cb4be888addea71db83938063eaf356c90938a42b6390a779498d3ed2a41395)
+  0xb24b1124276b1250ad3b2c02623677bce3e76c1539f76dcdfe4c27ab991c1dad)
     echo hecotest;;
   0x5751d1772ebc82d52d19d96157bb3f13ca8417217e3c0913adf15f04eb4cb144)
     echo heco;;
-  0x177faa2eb3975cfb29d14ec337b66656ab120cdaa1656ce1d7cb93e68b06049e)
+  0x8cb4be888addea71db83938063eaf356c90938a42b6390a779498d3ed2a41395)
     echo pangolin;;
   *)
     echo unknown;;

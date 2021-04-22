@@ -4,6 +4,8 @@
 
 set -e
 
+if [ "$DAPP_VERBOSE" ]; then set -x; fi
+
 [[ $ETHERSCAN_API_KEY ]] || {
   cat >&2 <<.
 
@@ -46,7 +48,8 @@ case "$chain" in
     export ETHERSCAN_URL=https://hecoinfo.com///address
     ;;
   *)
-    echo >&2 "Verification only works on mainnet, ropsten, kovan, rinkeby, and goerli."
+    echo "$chain"
+    echo >&2 "Verification only works on mainnet, ropsten, kovan, rinkeby, goerli, bsc and heco."
     exit 1
 esac
 
@@ -55,12 +58,13 @@ name=${path#*:}
 address=${2?contractaddress}
 
 # combined-json has a sourceList field
-if [[ $(jq .sourceList "$DAPP_JSON") == null ]]; then
+if [[ $(jq .sourceList "$DAPP_JSON") == null && -z "$DAPP_BUILD_LEGACY" ]]; then
     contract=$(<"$DAPP_JSON" jq -r ".contracts[\"${path/:*/}\"][\"$name\"]")
+    meta=$(<"$DAPP_JSON" jshon -e contracts -e "$path" -e metadata -u)
 else 
     contract=$(<"$DAPP_JSON" jq -r ".contracts[\"$path\"]")
+    meta=$(jshon <<<"$contract" -e metadata -u)
 fi
-meta=$(jshon <<<"$contract" -e metadata -u)
 version=$(jshon <<<"$meta" -e compiler -e version -u)
 file=$(jshon <<<"$meta" -e settings -e compilationTarget -k)
 optimized=$(jshon <<<"$meta" -e settings -e optimizer -e enabled -u)
