@@ -12,6 +12,8 @@
 ###              workflows.
 set -e
 
+if [ "$DAPP_VERBOSE" ]; then set -x; fi
+
 info() {
   while [[ $# -gt 0 ]]; do
     opt=$1; shift
