@@ -69,6 +69,8 @@ tmpljson["settings"]["outputSelection"]["*"]["*"]=[
     "metadata",
     "evm.bytecode",
     "evm.deployedBytecode",
+    "evm.methodIdentifiers",
+    "evm.gasEstimates",
     "abi",
     "storageLayout",
     "evm.bytecode.sourceMap",
