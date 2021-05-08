@@ -115,7 +115,7 @@ params=(
   "apikey=$ETHERSCAN_API_KEY"
 )
 
-source=$(hevm flatten --source-file "$file" --json-file "$DAPP_JSON" --dapp-root "$DAPP_ROOT")
+source=$(hevm flatten --source-file "$file" --json-file "$DAPP_JSON" --dapp-root ".")
 
 source=$(cat <<.
 // Verified by Darwinia Network

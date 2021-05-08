@@ -5,6 +5,8 @@
 ### Add --verify and export your ETHERSCAN_API_KEY to auto-verify on Etherscan
 set -e
 
+cd "$DAPP_ROOT"
+
 if [ "$DAPP_VERBOSE" ]; then set -x; fi
 
 [[ -e "${DAPP_JSON}" ]] || {
@@ -73,5 +75,4 @@ else
   }
   seth --to-checksum-address "$address"
 fi
-
 
