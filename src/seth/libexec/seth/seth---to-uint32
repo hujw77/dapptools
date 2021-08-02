@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+### seth---to-uint32 -- convert an integer into uint16 value
+### Usage: seth --to-uint32 <value>
+set -e
+[[ $1 ]] || set -- "$(cat)"
+hex=$(seth --to-hex "$1")
+printf "0x%8s\\n" "${hex#0x}" | tr ' ' 0

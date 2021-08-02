@@ -41,11 +41,19 @@ case "$chain" in
     ;;
   hecotest)
     export ETHERSCAN_API_URL=https://api-testnet.hecoinfo.com/api
-    export ETHERSCAN_URL=https://testnet.hecoinfo.com//address
+    export ETHERSCAN_URL=https://testnet.hecoinfo.com/address
     ;;
   heco)
     export ETHERSCAN_API_URL=https://api.hecoinfo.com/api
-    export ETHERSCAN_URL=https://hecoinfo.com///address
+    export ETHERSCAN_URL=https://hecoinfo.com/address
+    ;;
+  polygon)
+    export ETHERSCAN_API_URL=https://api.polygonscan.com/api
+    export ETHERSCAN_URL=https://polygonscan.com/address
+    ;;
+  mumbai)
+    export ETHERSCAN_API_URL=https://api-mumbai.polygonscan.com/api
+    export ETHERSCAN_URL=https://mumbai.polygonscan.com/address
     ;;
   *)
     echo "$chain"

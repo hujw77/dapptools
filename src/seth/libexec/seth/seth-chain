@@ -33,6 +33,10 @@ case $genesis in
     echo heco;;
   0x8cb4be888addea71db83938063eaf356c90938a42b6390a779498d3ed2a41395)
     echo pangolin;;
+  0xa9c28ce2141b56c474f1dc504bee9b01eb1bd7d1a507580d5519d4437a97de1b)
+    echo polygon;;
+  0x7b66506a9ebdbf30d32b43c5f15a3b1216269a1ec3a75aa3182b86176a2b1ca7)
+    echo mumbai;;
   *)
     echo unknown;;
 esac
