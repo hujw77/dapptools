@@ -52,7 +52,7 @@ case "$chain" in
     export ETHERSCAN_URL=https://polygonscan.com/address
     ;;
   mumbai)
-    export ETHERSCAN_API_URL=https://api-mumbai.polygonscan.com/api
+    export ETHERSCAN_API_URL=https://api-testnet.polygonscan.com/api
     export ETHERSCAN_URL=https://mumbai.polygonscan.com/address
     ;;
   *)
