@@ -9,7 +9,6 @@ module EVM.Types where
 
 import Prelude hiding  (Word, LT, GT)
 
-import Data.Aeson (FromJSONKey (..), FromJSONKeyFunction (..))
 import Data.Aeson
 import Crypto.Hash
 import Data.SBV hiding (Word)
@@ -17,7 +16,6 @@ import Data.Kind
 import Data.Bifunctor (first)
 import Data.Char
 import Data.List (intercalate)
-import Data.Bifunctor (bimap)
 import Data.ByteString (ByteString)
 import Data.ByteString.Base16 as BS16
 import Data.ByteString.Builder (byteStringHex, toLazyByteString)
@@ -130,11 +128,6 @@ instance Show ByteStringS where
     where
       fromBinary =
         Text.decodeUtf8 . toStrict . toLazyByteString . byteStringHex
-
-instance Read ByteStringS where
-    readsPrec _ ('0':'x':x) = [bimap ByteStringS (Text.unpack . Text.decodeUtf8) bytes]
-       where bytes = BS16.decode (Text.encodeUtf8 (Text.pack x))
-    readsPrec _ _ = []
 
 instance JSON.ToJSON ByteStringS where
   toJSON = JSON.String . Text.pack . show
@@ -252,8 +245,8 @@ instance Show Whiff where
       SGT x y     -> infix' " s> " x y
       IsZero x    -> "IsZero(" ++ show x ++ ")"
       SHL x y     -> infix' " << " x y
-      SHR x y     -> infix' " << " x y
-      SAR x y     -> infix' " a<< " x y
+      SHR x y     -> infix' " >> " x y
+      SAR x y     -> infix' " a>> " x y
       Add x y     -> infix' " + " x y
       Sub x y     -> infix' " - " x y
       Mul x y     -> infix' " * " x y
@@ -364,7 +357,7 @@ instance Show Addr where
   showsPrec _ addr next =
     let hex = showHex addr next
         str = replicate (40 - length hex) '0' ++ hex
-    in "0x" ++ toChecksumAddress str
+    in "0x" ++ toChecksumAddress str ++ drop 40 str
 
 instance Show SAddr where
   show (SAddr a) = case unliteral a of
@@ -424,13 +417,13 @@ instance ParseRecord Addr where
 hexByteString :: String -> ByteString -> ByteString
 hexByteString msg bs =
   case BS16.decode bs of
-    (x, "") -> x
+    Right x -> x
     _ -> error ("invalid hex bytestring for " ++ msg)
 
 hexText :: Text -> ByteString
 hexText t =
   case BS16.decode (Text.encodeUtf8 (Text.drop 2 t)) of
-    (x, "") -> x
+    Right x -> x
     _ -> error ("invalid hex bytestring " ++ show t)
 
 readN :: Integral a => String -> a

@@ -2,6 +2,8 @@
 
 {-# Language CPP #-}
 {-# Language DataKinds #-}
+{-# Language StandaloneDeriving #-}
+{-# Language DeriveAnyClass #-}
 {-# Language FlexibleInstances #-}
 {-# Language DeriveGeneric #-}
 {-# Language GADTs #-}
@@ -36,7 +38,7 @@ import EVM.Types hiding (word)
 import EVM.UnitTest (UnitTestOptions, coverageReport, coverageForUnitTestContract)
 import EVM.UnitTest (runUnitTestContract)
 import EVM.UnitTest (getParametersFromEnvironmentVariables, testNumber)
-import EVM.Dapp (findUnitTests, dappInfo, DappInfo, emptyDapp)
+import EVM.Dapp (findUnitTests, dappInfo, DappInfo, emptyDapp, regexMatches)
 import EVM.Format (showTraceTree, showTree', renderTree, showBranchInfoWithAbi, showLeafInfo)
 import EVM.RLP (rlpdecode)
 import qualified EVM.Patricia as Patricia
@@ -60,6 +62,7 @@ import Data.Text.Encoding         (encodeUtf8)
 import Data.Text.IO               (hPutStr)
 import Data.Maybe                 (fromMaybe, fromJust)
 import Data.Version               (showVersion)
+import Data.DoubleWord            (Word256)
 import Data.SBV hiding (Word, solver, verbose, name)
 import Data.SBV.Control hiding (Version, timeout, create)
 import System.IO                  (hFlush, stdout, stderr)
@@ -79,6 +82,7 @@ import qualified Data.ByteString        as ByteString
 import qualified Data.ByteString.Char8  as Char8
 import qualified Data.ByteString.Lazy   as LazyByteString
 import qualified Data.Map               as Map
+import qualified Data.Text              as Text
 import qualified System.Timeout         as Timeout
 
 import qualified Paths_hevm      as Paths
@@ -101,6 +105,8 @@ data Command w
       , gas           :: w ::: Maybe W256       <?> "Tx: gas amount"
       , number        :: w ::: Maybe W256       <?> "Block: number"
       , timestamp     :: w ::: Maybe W256       <?> "Block: timestamp"
+      , basefee       :: w ::: Maybe W256       <?> "Block: base fee"
+      , priorityFee   :: w ::: Maybe W256       <?> "Tx: priority fee"
       , gaslimit      :: w ::: Maybe W256       <?> "Tx: gas limit"
       , gasprice      :: w ::: Maybe W256       <?> "Tx: gas price"
       , create        :: w ::: Bool             <?> "Tx: creation"
@@ -122,20 +128,23 @@ data Command w
       , debug         :: w ::: Bool               <?> "Run interactively"
       , getModels     :: w ::: Bool               <?> "Print example testcase for each execution path"
       , showTree      :: w ::: Bool               <?> "Print branches explored in tree view"
-      , smttimeout    :: w ::: Maybe Integer      <?> "Timeout given to SMT solver in milliseconds (default: 30000)"
+      , smttimeout    :: w ::: Maybe Integer      <?> "Timeout given to SMT solver in milliseconds (default: 60000)"
       , maxIterations :: w ::: Maybe Integer      <?> "Number of times we may revisit a particular branching point"
       , solver        :: w ::: Maybe Text         <?> "Used SMT solver: z3 (default) or cvc4"
       , smtdebug      :: w ::: Bool               <?> "Print smt queries sent to the solver"
+      , assertions    :: w ::: Maybe [Word256]    <?> "Comma seperated list of solc panic codes to check for (default: everything except arithmetic overflow)"
+      , askSmtIterations :: w ::: Maybe Integer   <?> "Number of times we may revisit a particular branching point before we consult the smt solver to check reachability (default: 5)"
       }
   | Equivalence -- prove equivalence between two programs
-      { codeA         :: w ::: ByteString    <?> "Bytecode of the first program"
-      , codeB         :: w ::: ByteString    <?> "Bytecode of the second program"
-      , sig           :: w ::: Maybe Text    <?> "Signature of types to decode / encode"
-      , smttimeout    :: w ::: Maybe Integer <?> "Timeout given to SMT solver in milliseconds (default: 30000)"
-      , maxIterations :: w ::: Maybe Integer <?> "Number of times we may revisit a particular branching point"
-      , solver        :: w ::: Maybe Text    <?> "Used SMT solver: z3 (default) or cvc4"
-      , smtoutput     :: w ::: Bool          <?> "Print verbose smt output"
-      , smtdebug      :: w ::: Bool               <?> "Print smt queries sent to the solver"
+      { codeA         :: w ::: ByteString       <?> "Bytecode of the first program"
+      , codeB         :: w ::: ByteString       <?> "Bytecode of the second program"
+      , sig           :: w ::: Maybe Text       <?> "Signature of types to decode / encode"
+      , smttimeout    :: w ::: Maybe Integer    <?> "Timeout given to SMT solver in milliseconds (default: 60000)"
+      , maxIterations :: w ::: Maybe Integer    <?> "Number of times we may revisit a particular branching point"
+      , solver        :: w ::: Maybe Text       <?> "Used SMT solver: z3 (default) or cvc4"
+      , smtoutput     :: w ::: Bool             <?> "Print verbose smt output"
+      , smtdebug      :: w ::: Bool             <?> "Print smt queries sent to the solver"
+      , askSmtIterations :: w ::: Maybe Integer <?> "Number of times we may revisit a particular branching point before we consult the smt solver to check reachability (default: 5)"
       }
   | Exec -- Execute a given program with specified env & calldata
       { code        :: w ::: Maybe ByteString <?> "Program bytecode"
@@ -149,6 +158,8 @@ data Command w
       , gas         :: w ::: Maybe W256       <?> "Tx: gas amount"
       , number      :: w ::: Maybe W256       <?> "Block: number"
       , timestamp   :: w ::: Maybe W256       <?> "Block: timestamp"
+      , basefee     :: w ::: Maybe W256       <?> "Block: base fee"
+      , priorityFee :: w ::: Maybe W256       <?> "Tx: priority fee"
       , gaslimit    :: w ::: Maybe W256       <?> "Tx: gas limit"
       , gasprice    :: w ::: Maybe W256       <?> "Tx: gas price"
       , create      :: w ::: Bool             <?> "Tx: creation"
@@ -171,6 +182,7 @@ data Command w
       , debug         :: w ::: Bool                     <?> "Run interactively"
       , jsontrace     :: w ::: Bool                     <?> "Print json trace output at every step"
       , fuzzRuns      :: w ::: Maybe Int                <?> "Number of times to run fuzz tests"
+      , depth         :: w ::: Maybe Int                <?> "Number of transactions to explore"
       , replay        :: w ::: Maybe (Text, ByteString) <?> "Custom fuzz case to run/debug"
       , rpc           :: w ::: Maybe URL                <?> "Fetch state from a remote node"
       , verbose       :: w ::: Maybe Int                <?> "Append call trace: {1} failures {2} all"
@@ -178,10 +190,13 @@ data Command w
       , state         :: w ::: Maybe String             <?> "Path to state repository"
       , cache         :: w ::: Maybe String             <?> "Path to rpc cache repository"
       , match         :: w ::: Maybe String             <?> "Test case filter - only run methods matching regex"
-      , smttimeout    :: w ::: Maybe Integer            <?> "Timeout given to SMT solver in milliseconds (default: 30000)"
-      , maxIterations :: w ::: Maybe Integer            <?> "Number of times we may revisit a particular branching point"
+      , covMatch      :: w ::: Maybe String             <?> "Coverage filter - only print coverage for files matching regex"
       , solver        :: w ::: Maybe Text               <?> "Used SMT solver: z3 (default) or cvc4"
       , smtdebug      :: w ::: Bool                     <?> "Print smt queries sent to the solver"
+      , ffi           :: w ::: Bool                     <?> "Allow the usage of the hevm.ffi() cheatcode (WARNING: this allows test authors to execute arbitrary code on your machine)"
+      , smttimeout    :: w ::: Maybe Integer            <?> "Timeout given to SMT solver in milliseconds (default: 60000)"
+      , maxIterations :: w ::: Maybe Integer            <?> "Number of times we may revisit a particular branching point"
+      , askSmtIterations :: w ::: Maybe Integer         <?> "Number of times we may revisit a particular branching point before we consult the smt solver to check reachability (default: 5)"
       }
   | BcTest -- Run an Ethereum Blockhain/GeneralState test
       { file      :: w ::: String    <?> "Path to .json test file"
@@ -228,6 +243,9 @@ type URL = Text
 -- For some reason haskell can't derive a
 -- parseField instance for (Text, ByteString)
 instance Options.ParseField (Text, ByteString)
+
+deriving instance Options.ParseField Word256
+deriving instance Options.ParseField [Word256]
 
 instance Options.ParseRecord (Command Options.Wrapped) where
   parseRecord =
@@ -279,11 +297,14 @@ unitTestOptions cmd testFile = do
          Just url -> EVM.Fetch.oracle (Just state) (Just (block', url)) True
          Nothing  -> EVM.Fetch.oracle (Just state) Nothing True
     , EVM.UnitTest.maxIter = maxIterations cmd
+    , EVM.UnitTest.askSmtIters = askSmtIterations cmd
     , EVM.UnitTest.smtTimeout = smttimeout cmd
     , EVM.UnitTest.solver = solver cmd
+    , EVM.UnitTest.covMatch = pack <$> covMatch cmd
     , EVM.UnitTest.smtState = Just state
     , EVM.UnitTest.verbose = verbose cmd
     , EVM.UnitTest.match = pack $ fromMaybe ".*" (match cmd)
+    , EVM.UnitTest.maxDepth = depth cmd
     , EVM.UnitTest.fuzzRuns = fromMaybe 100 (fuzzRuns cmd)
     , EVM.UnitTest.replay = do
         arg' <- replay cmd
@@ -291,6 +312,7 @@ unitTestOptions cmd testFile = do
     , EVM.UnitTest.vmModifier = vmModifier
     , EVM.UnitTest.testParams = params
     , EVM.UnitTest.dapp = srcInfo
+    , EVM.UnitTest.ffiAllowed = ffi cmd
     }
 
 main :: IO ()
@@ -300,7 +322,7 @@ main = do
     root = fromMaybe "." (dappRoot cmd)
   case cmd of
     Version {} -> putStrLn (showVersion Paths.version)
-    Symbolic {} -> assert cmd
+    Symbolic {} -> withCurrentDirectory root $ assert cmd
     Equivalence {} -> equivalence cmd
     Exec {} ->
       launchExec cmd
@@ -408,26 +430,29 @@ equivalence cmd =
                        return $ Just (view methodSignature method', snd <$> view methodInputs method')
 
      void . runSMTWithTimeOut (solver cmd) (smttimeout cmd) (smtdebug cmd) . query $
-       equivalenceCheck bytecodeA bytecodeB (maxIterations cmd) maybeSignature >>= \case
-         Right vm -> do io $ putStrLn "Not equal!"
-                        io $ putStrLn "Counterexample:"
-                        showCounterexample vm maybeSignature
-                        io exitFailure
-         Left (postAs, postBs) -> io $ do
+       equivalenceCheck bytecodeA bytecodeB (maxIterations cmd) (askSmtIterations cmd) maybeSignature >>= \case
+         Cex vm -> do
+           io $ putStrLn "Not equal!"
+           io $ putStrLn "Counterexample:"
+           showCounterexample vm maybeSignature
+           io exitFailure
+         Qed (postAs, postBs) -> io $ do
            putStrLn $ "Explored: " <> show (length postAs)
                        <> " execution paths of A and: "
                        <> show (length postBs) <> " paths of B."
            putStrLn "No discrepancies found."
-
+         Timeout () -> io $ do
+           hPutStr stderr "Solver timeout!"
+           exitFailure
 
 -- cvc4 sets timeout via a commandline option instead of smtlib `(set-option)`
 runSMTWithTimeOut :: Maybe Text -> Maybe Integer -> Bool -> Symbolic a -> IO a
 runSMTWithTimeOut solver maybeTimeout smtdebug symb
   | solver == Just "cvc4" = runwithcvc4
   | solver == Just "z3" = runwithz3
-  | solver == Nothing = runwithcvc4
+  | solver == Nothing = runwithz3
   | otherwise = error "Unknown solver. Currently supported solvers; z3, cvc4"
- where timeout = fromMaybe 30000 maybeTimeout
+ where timeout = fromMaybe 60000 maybeTimeout
        runwithz3 = runSMTWith z3{SBV.verbose=smtdebug} $ (setTimeOut timeout) >> symb
        runwithcvc4 = do
          setEnv "SBV_CVC4_OPTIONS" ("--lang=smt --incremental --interactive --no-interactive-prompt --model-witness-value --tlimit-per=" <> show timeout)
@@ -503,13 +528,17 @@ assert cmd = do
   else
     runSMTWithTimeOut (solver cmd) (smttimeout cmd) (smtdebug cmd) $ query $ do
       preState <- symvmFromCommand cmd
-      verify preState (maxIterations cmd) rpcinfo (Just checkAssertions) >>= \case
-        Right tree -> do
+      let errCodes = fromMaybe defaultPanicCodes (assertions cmd)
+      verify preState (maxIterations cmd) (askSmtIterations cmd) rpcinfo (Just $ checkAssertions errCodes) >>= \case
+        Cex tree -> do
           io $ putStrLn "Assertion violation found."
           showCounterexample preState maybesig
           treeShowing tree
           io $ exitWith (ExitFailure 1)
-        Left tree -> do
+        Timeout tree -> do
+          treeShowing tree
+          io $ exitWith (ExitFailure 1)
+        Qed tree -> do
           io $ putStrLn $ "Explored: " <> show (length tree)
                        <> " branches without assertion violations"
           treeShowing tree
@@ -568,23 +597,33 @@ dappCoverage opts _ solcFile =
         let
           dapp = dappInfo "." contractMap sourceCache
           f (k, vs) = do
-            putStr "***** hevm coverage for "
-            putStrLn (unpack k)
-            putStrLn ""
-            forM_ vs $ \(n, bs) -> do
-              case ByteString.find (\x -> x /= 0x9 && x /= 0x20 && x /= 0x7d) bs of
-                Nothing -> putStr "..... "
-                Just _ ->
-                  case n of
-                    -1 -> putStr ";;;;; "
-                    0  -> putStr "##### "
-                    _  -> putStr "      "
-              Char8.putStrLn bs
-            putStrLn ""
-
+            when (shouldPrintCoverage (EVM.UnitTest.covMatch opts) k) $ do
+              putStr ("\x1b[0m" ++ "————— hevm coverage for ") -- Prefixed with color reset
+              putStrLn (unpack k ++ " —————")
+              putStrLn ""
+              forM_ vs $ \(n, bs) -> do
+                case ByteString.find (\x -> x /= 0x9 && x /= 0x20 && x /= 0x7d) bs of
+                  Nothing -> putStr "\x1b[38;5;240m" -- Gray (Coverage status isn't relevant)
+                  Just _ ->
+                    case n of
+                      -1 -> putStr "\x1b[38;5;240m" -- Gray (Coverage status isn't relevant)
+                      0  -> putStr "\x1b[31m" -- Red (Uncovered)
+                      _  -> putStr "\x1b[32m" -- Green (Covered)
+                Char8.putStrLn bs
+              putStrLn ""
         mapM_ f (Map.toList (coverageReport dapp covs))
       Nothing ->
         error ("Failed to read Solidity JSON for `" ++ solcFile ++ "'")
+
+shouldPrintCoverage :: Maybe Text -> Text -> Bool
+shouldPrintCoverage (Just covMatch) file = regexMatches covMatch file
+shouldPrintCoverage Nothing file = not (isTestOrLib file)
+
+isTestOrLib :: Text -> Bool
+isTestOrLib file = Text.isSuffixOf ".t.sol" file || areAnyPrefixOf ["src/test/", "src/tests/", "lib/"] file
+
+areAnyPrefixOf :: [Text] -> Text -> Bool
+areAnyPrefixOf prefixes t = any (flip Text.isPrefixOf t) prefixes
 
 launchExec :: Command Options.Unwrapped -> IO ()
 launchExec cmd = do
@@ -686,12 +725,13 @@ vmFromCommand :: Command Options.Unwrapped -> IO EVM.VM
 vmFromCommand cmd = do
   withCache <- applyCache (state cmd, cache cmd)
 
-  (miner,ts,blockNum,diff) <- case rpc cmd of
-    Nothing -> return (0,0,0,0)
+  (miner,ts,baseFee,blockNum,diff) <- case rpc cmd of
+    Nothing -> return (0,0,0,0,0)
     Just url -> EVM.Fetch.fetchBlockFrom block' url >>= \case
       Nothing -> error "Could not fetch block"
       Just EVM.Block{..} -> return (_coinbase
                                    , wordValue $ forceLit _timestamp
+                                   , wordValue _baseFee
                                    , wordValue _number
                                    , wordValue _difficulty
                                    )
@@ -724,7 +764,7 @@ vmFromCommand cmd = do
     (_, _, Nothing) ->
       error "must provide at least (rpc + address) or code"
 
-  return $ VMTest.initTx $ withCache (vm0 miner ts blockNum diff contract)
+  return $ VMTest.initTx $ withCache (vm0 baseFee miner ts blockNum diff contract)
     where
         decipher = hexByteString "bytes" . strip0x
         block'   = maybe EVM.Fetch.Latest EVM.Fetch.BlockNumber (block cmd)
@@ -737,7 +777,7 @@ vmFromCommand cmd = do
               then addr address (createAddress origin' (word nonce 0))
               else addr address 0xacab
 
-        vm0 miner ts blockNum diff c = EVM.makeVm $ EVM.VMOpts
+        vm0 baseFee miner ts blockNum diff c = EVM.makeVm $ EVM.VMOpts
           { EVM.vmoptContract      = c
           , EVM.vmoptCalldata      = (calldata', litWord (num $ len calldata'))
           , EVM.vmoptValue         = w256lit value'
@@ -745,6 +785,8 @@ vmFromCommand cmd = do
           , EVM.vmoptCaller        = litAddr caller'
           , EVM.vmoptOrigin        = origin'
           , EVM.vmoptGas           = word gas 0
+          , EVM.vmoptBaseFee       = baseFee
+          , EVM.vmoptPriorityFee   = word priorityFee 0
           , EVM.vmoptGaslimit      = word gas 0
           , EVM.vmoptCoinbase      = addr coinbase miner
           , EVM.vmoptNumber        = word number blockNum
@@ -753,10 +795,12 @@ vmFromCommand cmd = do
           , EVM.vmoptGasprice      = word gasprice 0
           , EVM.vmoptMaxCodeSize   = word maxcodesize 0xffffffff
           , EVM.vmoptDifficulty    = word difficulty diff
-          , EVM.vmoptSchedule      = FeeSchedule.istanbul
+          , EVM.vmoptSchedule      = FeeSchedule.berlin
           , EVM.vmoptChainId       = word chainid 1
           , EVM.vmoptCreate        = create cmd
           , EVM.vmoptStorageModel  = ConcreteS
+          , EVM.vmoptTxAccessList  = mempty -- TODO: support me soon
+          , EVM.vmoptAllowFFI      = False
           }
         word f def = fromMaybe def (f cmd)
         addr f def = fromMaybe def (f cmd)
@@ -765,12 +809,13 @@ vmFromCommand cmd = do
 symvmFromCommand :: Command Options.Unwrapped -> Query EVM.VM
 symvmFromCommand cmd = do
 
-  (miner,blockNum,diff) <- case rpc cmd of
-    Nothing -> return (0,0,0)
+  (miner,blockNum,baseFee,diff) <- case rpc cmd of
+    Nothing -> return (0,0,0,0)
     Just url -> io $ EVM.Fetch.fetchBlockFrom block' url >>= \case
-      Nothing -> error $ "Could not fetch block"
+      Nothing -> error "Could not fetch block"
       Just EVM.Block{..} -> return (_coinbase
                                    , wordValue _number
+                                   , wordValue _baseFee
                                    , wordValue _difficulty
                                    )
 
@@ -826,11 +871,11 @@ symvmFromCommand cmd = do
                         & set EVM.external    (view EVM.external contract')
 
     (_, _, Just c)  ->
-      return $ (EVM.initialContract . codeType $ decipher c)
+      return (EVM.initialContract . codeType $ decipher c)
     (_, _, Nothing) ->
       error "must provide at least (rpc + address) or code"
 
-  return $ (VMTest.initTx $ withCache $ vm0 miner ts blockNum diff cdlen calldata' callvalue' caller' contract')
+  return $ (VMTest.initTx $ withCache $ vm0 baseFee miner ts blockNum diff cdlen calldata' callvalue' caller' contract')
     & over EVM.constraints (<> [pathCond])
     & set (EVM.env . EVM.contracts . (ix address') . EVM.storage) store
 
@@ -842,7 +887,7 @@ symvmFromCommand cmd = do
     address' = if create cmd
           then addr address (createAddress origin' (word nonce 0))
           else addr address 0xacab
-    vm0 miner ts blockNum diff cdlen calldata' callvalue' caller' c = EVM.makeVm $ EVM.VMOpts
+    vm0 baseFee miner ts blockNum diff cdlen calldata' callvalue' caller' c = EVM.makeVm $ EVM.VMOpts
       { EVM.vmoptContract      = c
       , EVM.vmoptCalldata      = (calldata', cdlen)
       , EVM.vmoptValue         = callvalue'
@@ -851,6 +896,8 @@ symvmFromCommand cmd = do
       , EVM.vmoptOrigin        = origin'
       , EVM.vmoptGas           = word gas 0xffffffffffffffff
       , EVM.vmoptGaslimit      = word gas 0xffffffffffffffff
+      , EVM.vmoptBaseFee       = baseFee
+      , EVM.vmoptPriorityFee   = word priorityFee 0
       , EVM.vmoptCoinbase      = addr coinbase miner
       , EVM.vmoptNumber        = word number blockNum
       , EVM.vmoptTimestamp     = ts
@@ -858,10 +905,12 @@ symvmFromCommand cmd = do
       , EVM.vmoptGasprice      = word gasprice 0
       , EVM.vmoptMaxCodeSize   = word maxcodesize 0xffffffff
       , EVM.vmoptDifficulty    = word difficulty diff
-      , EVM.vmoptSchedule      = FeeSchedule.istanbul
+      , EVM.vmoptSchedule      = FeeSchedule.berlin
       , EVM.vmoptChainId       = word chainid 1
       , EVM.vmoptCreate        = create cmd
       , EVM.vmoptStorageModel  = fromMaybe SymbolicS (storageModel cmd)
+      , EVM.vmoptTxAccessList  = mempty
+      , EVM.vmoptAllowFFI      = False
       }
     word f def = fromMaybe def (f cmd)
     addr f def = fromMaybe def (f cmd)

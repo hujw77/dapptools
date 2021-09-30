@@ -2,16 +2,16 @@
 
 Hello!
 
-`dapptools` is a suite of Ethereum focused CLI tools following the unix design philosophy,
+`dapptools` is a suite of Ethereum focused CLI tools following the Unix design philosophy,
 favoring composability, configurability and extensibility.
 
 This repository contains the source code for several programs
 hand-crafted and maintained by DappHub, along with dependency management, courtesy of Nix.
 
-- [dapp](./src/dapp) - all you need Ethereum development tool. Build, test, fuzz, formally verify, debug & deploy solidity contracts.
+- [dapp](./src/dapp) - All you need Ethereum development tool. Build, test, fuzz, formally verify, debug & deploy solidity contracts.
 - [seth](./src/seth) - Ethereum CLI. Query contracts, send transactions, follow logs, slice & dice data.
 - [hevm](./src/hevm) - Testing oriented EVM implementation. Debug, fuzz, or symbolically execute code against local or mainnet state.
-- [ethsign](./src/ethsign) - sign Ethereum transactions from a local keystore or hardware wallet.
+- [ethsign](./src/ethsign) - Sign Ethereum transactions from a local keystore or hardware wallet.
 
 ## Installation
 
@@ -30,24 +30,35 @@ Then install dapptools:
 ```
 curl https://dapp.tools/install | sh
 ```
+This configures the dapphub binary cache and installs the `dapp`, `solc`, `seth` and `hevm` executables.
 
-This configures the dapphub binary cache and installs the `dapp`, `solc`, `seth` and `hevm` executables. 
+**NOTE:** Arm support in the GHC haskell compiiler is still fairly bleeding edge, until this
+situation stabilises, users of M1 macs must run dapptools (and the installer!) under rosetta 2 (i.e.
+as an emulated x86 program).
 
-You can also install an individual tool with 
+
+You can also install an individual tool with
 ```sh
 nix-env -iA <tool> -f $(curl -sS https://api.github.com/repos/dapphub/dapptools/releases/latest | jq -r .tarball_url)
 ```
 
 If you instead want to build from `master`, change the url to `https://github.com/dapphub/dapptools/archive/master.tar.gz`.
 
+### Prebuilt hevm binary
+
+Static binaries for linux and macos of hevm are available for each release at https://github.com/dapphub/dapptools/releases.
+
+Most functionality is available out of the box, but for symbolic execution you will need
+[`solc`](https://github.com/ethereum/solidity) and ([`z3`](https://github.com/Z3Prover/z3/) or [`cvc4`](https://github.com/CVC4/CVC4) (or both)).
+
 ## Getting started
 
 For more information about the tools, consult the individual README pages:
 
-[seth](./src/seth/README.md)
-[dapp](./src/dapp/README.md)
-[hevm](./src/dapp/README.md)
-[ethsign](./src/ethsign/README.md)
+- [seth](./src/seth/README.md)
+- [dapp](./src/dapp/README.md)
+- [hevm](./src/hevm/README.md)
+- [ethsign](./src/ethsign/README.md)
 
 or use the `--help` flag for any tool.
 
@@ -55,7 +66,7 @@ We're also happy to answer any questions at https://dapphub.chat/.
 
 ## Examples
 
-Deploy a Hello world contract and call it:
+Deploy a 'Hello World' contract and call it:
 ```sh
 export ETH_RPC_URL=https://mainnet.infura.io/v3/$YOUR_API_KEY
 export ETH_FROM=$YOUR_ADDRESS
@@ -70,7 +81,7 @@ export ETH_RPC_URL=https://mainnet.infura.io/v3/$YOUR_API_KEY
 seth run-tx $(seth block latest transactions | jq .'[0]' -r) --debug
 ```
 
-If Vitaliks next transaction were a contract deployment, calculate the address it would be deployed at:
+If Vitalik's next transaction were a contract deployment, calculate the address it would be deployed at:
 ```
 export ETH_RPC_URL=https://mainnet.infura.io/v3/$YOUR_API_KEY
 dapp address 0xab5801a7d398351b8be11c439e05c5b3259aec9b $(seth nonce 0xab5801a7d398351b8be11c439e05c5b3259aec9b)
@@ -84,8 +95,7 @@ hevm symbolic --address 0x6b175474e89094c44da98b954eedeac495271d0f --rpc $ETH_RP
 
 ## Contributing
 
-Contributions are always welcome! You may be interested in the 
+Contributions are always welcome! You may be interested in the
 [architecture](./ARCHITECTURE.md) of this repository.
 
----
 [![built with nix](https://builtwithnix.org/badge.svg)](https://builtwithnix.org)

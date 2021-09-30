@@ -289,9 +289,6 @@ atFileLine dapp wantedFileName wantedLineNumber vm =
   case currentSrcMap dapp vm of
     Nothing -> False
     Just sm ->
-      case view (dappSources . sourceFiles . at (srcMapFile sm)) dapp of
-        Nothing -> False
-        Just _ ->
           let
             (currentFileName, currentLineNumber) =
               fromJust (srcMapCodePos (view dappSources dapp) sm)
@@ -323,7 +320,7 @@ outputVm = do
   fromMaybe noMap $ do
     dapp <- view uiVmDapp s
     sm <- currentSrcMap dapp (view uiVm s)
-    (fileName, _) <- view (dappSources . sourceFiles . at (srcMapFile sm)) dapp
+    let (fileName, _) = view (dappSources . sourceFiles) dapp !! srcMapFile sm
     pure . output $
       L [ A "step"
         , L [A ("vm" :: Text), sexp (view uiVm s)]
@@ -508,18 +505,22 @@ defaultUnitTestOptions :: MonadIO m => m UnitTestOptions
 defaultUnitTestOptions = do
   params <- liftIO $ getParametersFromEnvironmentVariables Nothing
   pure UnitTestOptions
-    { oracle            = Fetch.zero
-    , verbose           = Nothing
-    , maxIter           = Nothing
-    , smtTimeout        = Nothing
-    , smtState          = Nothing
-    , solver            = Nothing
-    , match             = ""
-    , fuzzRuns          = 100
-    , replay            = Nothing
-    , vmModifier        = id
-    , dapp              = emptyDapp
-    , testParams        = params
+    { oracle      = Fetch.zero
+    , verbose     = Nothing
+    , maxIter     = Nothing
+    , askSmtIters = Nothing
+    , smtTimeout  = Nothing
+    , smtState    = Nothing
+    , solver      = Nothing
+    , match       = ""
+    , covMatch    = Nothing
+    , fuzzRuns    = 100
+    , replay      = Nothing
+    , vmModifier  = id
+    , dapp        = emptyDapp
+    , testParams  = params
+    , maxDepth    = Nothing
+    , ffiAllowed  = False
     }
 
 initialStateForTest

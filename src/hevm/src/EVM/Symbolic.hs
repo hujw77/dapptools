@@ -63,12 +63,12 @@ smod (S a x) (S b y) = let sx, sy :: SInt 256
 addmod :: SymWord -> SymWord -> SymWord -> SymWord
 addmod (S a x) (S b y) (S c z) = let to512 :: SWord 256 -> SWord 512
                                      to512 = sFromIntegral
-                                 in S (Todo "addmod" [a, b, c]) $ sFromIntegral $ ((to512 x) + (to512 y)) `sMod` (to512 z)
+                                 in  S (Todo "addmod" [a, b, c]) $ ite (z .== 0) 0 $ sFromIntegral $ ((to512 x) + (to512 y)) `sMod` (to512 z)
 
 mulmod :: SymWord -> SymWord -> SymWord -> SymWord
 mulmod (S a x) (S b y) (S c z) = let to512 :: SWord 256 -> SWord 512
                                      to512 = sFromIntegral
-                                 in S (Todo "mulmod" [a, b, c]) $ sFromIntegral $ ((to512 x) * (to512 y)) `sMod` (to512 z)
+                                 in S (Todo "mulmod" [a, b, c]) $ ite (z .== 0) 0 $ sFromIntegral $ ((to512 x) * (to512 y)) `sMod` (to512 z)
 
 -- | Signed less than
 slt :: SymWord -> SymWord -> SymWord
@@ -259,13 +259,13 @@ whiffValue w = case w of
   Div x y       -> whiffValue x `sDiv` whiffValue y
   Mod x y       -> whiffValue x `sMod` whiffValue y
   Exp x y       -> whiffValue x .^ whiffValue y
-  Neg x         -> negate $ whiffValue x
+  Neg x         -> complement $ whiffValue x
   Var _ v       -> v
   FromKeccak (ConcreteBuffer bstr) -> literal $ num $ keccak bstr
   FromKeccak (SymbolicBuffer buf)  -> symkeccak' buf
   Literal x -> literal $ num $ x
   FromBytes buf -> rawVal $ readMemoryWord 0 buf
-  FromStorage ind arr -> readArray arr (whiffValue ind) 
+  FromStorage ind arr -> readArray arr (whiffValue ind)
 
 -- | Special cases that have proven useful in practice
 simplifyCondition :: SBool -> Whiff -> SBool

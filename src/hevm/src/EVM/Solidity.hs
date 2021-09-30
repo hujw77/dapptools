@@ -3,11 +3,15 @@
 {-# Language StrictData #-}
 {-# Language TemplateHaskell #-}
 {-# Language OverloadedStrings #-}
+{-# Language QuasiQuotes #-}
 
 module EVM.Solidity
   ( solidity
   , solcRuntime
   , solidity'
+  , yul'
+  , yul
+  , yulRuntime
   , JumpType (..)
   , SolcContract (..)
   , StorageItem (..)
@@ -16,12 +20,16 @@ module EVM.Solidity
   , CodeType (..)
   , Method (..)
   , SlotType (..)
+  , Reference(..)
+  , Mutability(..)
   , methodName
   , methodSignature
   , methodInputs
   , methodOutput
+  , methodMutability
   , abiMap
   , eventMap
+  , errorMap
   , storageLayout
   , contractName
   , constructorInputs
@@ -59,7 +67,9 @@ import Data.SBV
 import Control.Applicative
 import Control.Monad
 import Control.Lens         hiding (Indexed, (.=))
-import Data.Aeson           (Value (..), ToJSON(..), (.=), object, encode)
+import qualified Data.String.Here as Here
+import Data.Aeson hiding (json)
+import Data.Aeson.Types
 import Data.Aeson.Lens
 import Data.Scientific
 import Data.ByteString      (ByteString)
@@ -76,7 +86,6 @@ import Data.Text            (Text, pack, intercalate)
 import Data.Text.Encoding   (encodeUtf8, decodeUtf8)
 import Data.Text.IO         (readFile, writeFile)
 import Data.Vector          (Vector)
-import Data.Word
 import GHC.Generics         (Generic)
 import Prelude hiding       (readFile, writeFile)
 import System.IO hiding     (readFile, writeFile)
@@ -136,6 +145,8 @@ data SolcContract = SolcContract
   , _constructorInputs :: [(Text, AbiType)]
   , _abiMap           :: Map Word32 Method
   , _eventMap         :: Map W256 Event
+  , _errorMap         :: Map W256 SolError
+  , _immutableReferences :: Map W256 [Reference]
   , _storageLayout    :: Maybe (Map Text StorageItem)
   , _runtimeSrcmap    :: Seq SrcMap
   , _creationSrcmap   :: Seq SrcMap
@@ -146,13 +157,33 @@ data Method = Method
   , _methodInputs :: [(Text, AbiType)]
   , _methodName :: Text
   , _methodSignature :: Text
+  , _methodMutability :: Mutability
   } deriving (Show, Eq, Ord, Generic)
 
+data Mutability
+  = Pure       -- ^ specified to not read blockchain state
+  | View       -- ^ specified to not modify the blockchain state
+  | NonPayable -- ^ function does not accept Ether - the default
+  | Payable    -- ^ function accepts Ether
+ deriving (Show, Eq, Ord, Generic)
+
 data SourceCache = SourceCache
-  { _sourceFiles  :: Map Int (Text, ByteString)
-  , _sourceLines  :: Map Int (Vector ByteString)
+  { _sourceFiles  :: [(Text, ByteString)]
+  , _sourceLines  :: [(Vector ByteString)]
   , _sourceAsts   :: Map Text Value
   } deriving (Show, Eq, Generic)
+
+data Reference = Reference
+  { _refStart :: Int,
+    _refLength :: Int
+  } deriving (Show, Eq)
+
+instance FromJSON Reference where
+  parseJSON (Object v) = Reference
+    <$> v .: "start"
+    <*> v .: "length"
+  parseJSON invalid =
+    typeMismatch "Transaction" invalid
 
 instance Semigroup SourceCache where
   _ <> _ = error "lol"
@@ -241,13 +272,9 @@ makeSourceCache paths asts = do
       f (fp, Nothing) = BS.readFile $ Text.unpack fp
   xs <- mapM f paths
   return $! SourceCache
-    { _sourceFiles =
-        Map.fromList (zip [0..] (zip (fst <$> paths) xs))
-    , _sourceLines =
-        Map.fromList (zip [0 .. length paths - 1]
-                       (map (Vector.fromList . BS.split 0xa) xs))
-    , _sourceAsts =
-        asts
+    { _sourceFiles = zip (fst <$> paths) xs
+    , _sourceLines = map (Vector.fromList . BS.split 0xa) xs
+    , _sourceAsts  = asts
     }
 
 lineSubrange ::
@@ -270,6 +297,22 @@ readSolc fp =
       Just (contracts, asts, sources) -> do
         sourceCache <- makeSourceCache sources asts
         return $! Just (contracts, sourceCache)
+
+yul :: Text -> Text -> IO (Maybe ByteString)
+yul contract src = do
+  (json, path) <- yul' src
+  let (Just f) = json ^?! key "contracts" ^? key path
+      (Just c) = f ^? key (if Text.null contract then "object" else contract)
+      bytecode = c ^?! key "evm" ^?! key "bytecode" ^?! key "object" . _String
+  pure $ toCode <$> (Just bytecode)
+
+yulRuntime :: Text -> Text -> IO (Maybe ByteString)
+yulRuntime contract src = do
+  (json, path) <- yul' src
+  let (Just f) = json ^?! key "contracts" ^? key path
+      (Just c) = f ^? key (if Text.null contract then "object" else contract)
+      bytecode = c ^?! key "evm" ^?! key "deployedBytecode" ^?! key "object" . _String
+  pure $ toCode <$> (Just bytecode)
 
 solidity :: Text -> Text -> IO (Maybe ByteString)
 solidity contract src = do
@@ -299,6 +342,7 @@ readJSON json = case json ^? key "sourceList" of
   Nothing -> readStdJSON json
   _ -> readCombinedJSON json
 
+-- deprecate me soon
 readCombinedJSON :: Text -> Maybe (Map Text SolcContract, Map Text Value, [(Text, Maybe ByteString)])
 readCombinedJSON json = do
   contracts <- f <$> (json ^? key "contracts" . _Object)
@@ -311,8 +355,9 @@ readCombinedJSON json = do
       let
         theRuntimeCode = toCode (x ^?! key "bin-runtime" . _String)
         theCreationCode = toCode (x ^?! key "bin" . _String)
-        abis =
-          toList ((x ^?! key "abi" . _String) ^?! _Array)
+        abis = toList $ case (x ^?! key "abi") ^? _Array of
+                 Just v -> v                                       -- solc >= 0.8
+                 Nothing -> (x ^?! key "abi" . _String) ^?! _Array -- solc <  0.8
       in SolcContract {
         _runtimeCode      = theRuntimeCode,
         _creationCode     = theCreationCode,
@@ -324,7 +369,9 @@ readCombinedJSON json = do
         _constructorInputs = mkConstructor abis,
         _abiMap       = mkAbiMap abis,
         _eventMap     = mkEventMap abis,
-        _storageLayout = mkStorageLayout $ x ^? key "storage-layout" . _String
+        _errorMap     = mkErrorMap abis,
+        _storageLayout = mkStorageLayout $ x ^? key "storage-layout",
+        _immutableReferences = mempty -- TODO: deprecate combined-json
       }
 
 readStdJSON :: Text -> Maybe (Map Text SolcContract, Map Text Value, [(Text, Maybe ByteString)])
@@ -340,13 +387,14 @@ readStdJSON json = do
     f :: (AsValue s) => HMap.HashMap Text s -> (Map Text (SolcContract, (HMap.HashMap Text Text)))
     f x = Map.fromList . (concatMap g) . HMap.toList $ x
     g (s, x) = h s <$> HMap.toList (view _Object x)
-    h s (c, x) = 
+    h :: Text -> (Text, Value) -> (Text, (SolcContract, HMap.HashMap Text Text))
+    h s (c, x) =
       let
         evmstuff = x ^?! key "evm"
         runtime = evmstuff ^?! key "deployedBytecode"
         creation =  evmstuff ^?! key "bytecode"
-        theRuntimeCode = toCode $ runtime ^?! key "object" . _String
-        theCreationCode = toCode $ creation ^?! key "object" . _String
+        theRuntimeCode = toCode $ fromMaybe "" $ runtime ^? key "object" . _String
+        theCreationCode = toCode $ fromMaybe "" $ creation ^? key "object" . _String
         srcContents :: Maybe (HMap.HashMap Text Text)
         srcContents = do metadata <- x ^? key "metadata" . _String
                          srcs <- metadata ^? key "sources" . _Object
@@ -364,7 +412,13 @@ readStdJSON json = do
         _constructorInputs = mkConstructor abis,
         _abiMap        = mkAbiMap abis,
         _eventMap      = mkEventMap abis,
-        _storageLayout = mkStorageLayout $ x ^? key "storage-layout" . _String
+        _errorMap      = mkErrorMap abis,
+        _storageLayout = mkStorageLayout $ x ^? key "storageLayout",
+        _immutableReferences = fromMaybe mempty $
+          do x' <- runtime ^? key "immutableReferences"
+             case fromJSON x' of
+               Success a -> return a
+               _ -> Nothing
       }, fromMaybe mempty srcContents))
 
 mkAbiMap :: [Value] -> Map Word32 Method
@@ -379,6 +433,8 @@ mkAbiMap abis = Map.fromList $
                  (toList (abi ^?! key "inputs" . _Array))
               , _methodOutput = map parseMethodInput
                  (toList (abi ^?! key "outputs" . _Array))
+              , _methodMutability = parseMutability
+                 (abi ^?! key "stateMutability" . _String)
               })
   in f <$> relevant
 
@@ -401,6 +457,22 @@ mkEventMap abis = Map.fromList $
      )
   in f <$> relevant
 
+mkErrorMap :: [Value] -> Map W256 SolError
+mkErrorMap abis = Map.fromList $
+  let
+    relevant = filter (\y -> "error" == y ^?! key "type" . _String) abis
+    f abi =
+     ( stripKeccak $ keccak (encodeUtf8 (signature abi))
+     , SolError
+       (abi ^?! key "name" . _String)
+       (map (\y -> ( force "internal error: type" (parseTypeName' y)))
+       (toList $ abi ^?! key "inputs" . _Array))
+     )
+  in f <$> relevant
+  where
+    stripKeccak :: W256 -> W256
+    stripKeccak = read . take 10 . show
+
 mkConstructor :: [Value] -> [(Text, AbiType)]
 mkConstructor abis =
   let
@@ -412,12 +484,12 @@ mkConstructor abis =
       [] -> [] -- default constructor has zero inputs
       _  -> error "strange: contract has multiple constructors"
 
-mkStorageLayout :: Maybe Text -> Maybe (Map Text StorageItem)
+mkStorageLayout :: Maybe Value -> Maybe (Map Text StorageItem)
 mkStorageLayout Nothing = Nothing
 mkStorageLayout (Just json) = do
   items <- json ^? key "storage" . _Array
   types <- json ^? key "types"
-  fmap Map.fromList $ (forM (Vector.toList items) $ \item ->
+  fmap Map.fromList (forM (Vector.toList items) $ \item ->
     do name <- item ^? key "label" . _String
        offset <- item ^? key "offset" . _Number >>= toBoundedInteger
        slot <- item ^? key "slot" . _String
@@ -446,6 +518,13 @@ parseTypeName' x =
     (x ^?! key "type" . _String)
   where parseComponents = fmap $ snd . parseMethodInput
 
+parseMutability :: Text -> Mutability
+parseMutability "view" = View
+parseMutability "pure" = Pure
+parseMutability "nonpayable" = NonPayable
+parseMutability "payable" = Payable
+parseMutability _ = error "unknown function mutability"
+
 -- This actually can also parse a method output! :O
 parseMethodInput :: AsValue s => s -> (Text, AbiType)
 parseMethodInput x =
@@ -454,16 +533,72 @@ parseMethodInput x =
   )
 
 toCode :: Text -> ByteString
-toCode = fst . BS16.decode . encodeUtf8
+toCode t = case BS16.decode (encodeUtf8 t) of
+  Right d -> d
+  Left e -> error e
 
 solidity' :: Text -> IO (Text, Text)
 solidity' src = withSystemTempFile "hevm.sol" $ \path handle -> do
   hClose handle
-  writeFile path ("pragma solidity ^0.6.7;\n" <> src)
+  writeFile path ("//SPDX-License-Identifier: UNLICENSED\n" <> "pragma solidity ^0.8.6;\n" <> src)
+  writeFile (path <> ".json")
+    [Here.i|
+    {
+      "language": "Solidity",
+      "sources": {
+        ${path}: {
+          "urls": [
+            ${path}
+          ]
+        }
+      },
+      "settings": {
+        "outputSelection": {
+          "*": {
+            "*": [
+              "metadata",
+              "evm.bytecode",
+              "evm.deployedBytecode",
+              "abi",
+              "storageLayout",
+              "evm.bytecode.sourceMap",
+              "evm.bytecode.linkReferences",
+              "evm.bytecode.generatedSources",
+              "evm.deployedBytecode.sourceMap",
+              "evm.deployedBytecode.linkReferences",
+              "evm.deployedBytecode.generatedSources"
+            ],
+            "": [
+              "ast"
+            ]
+          }
+        }
+      }
+    }
+    |]
   x <- pack <$>
     readProcess
       "solc"
-      ["--combined-json=bin-runtime,bin,srcmap,srcmap-runtime,abi,ast,storage-layout", path]
+      ["--allow-paths", path, "--standard-json", (path <> ".json")]
+      ""
+  return (x, pack path)
+
+yul' :: Text -> IO (Text, Text)
+yul' src = withSystemTempFile "hevm.yul" $ \path handle -> do
+  hClose handle
+  writeFile path src
+  writeFile (path <> ".json")
+    [Here.i|
+    {
+      "language": "Yul",
+      "sources": { ${path}: { "urls": [ ${path} ] } },
+      "settings": { "outputSelection": { "*": { "*": ["*"], "": [ "*" ] } } }
+    }
+    |]
+  x <- pack <$>
+    readProcess
+      "solc"
+      ["--allow-paths", path, "--standard-json", (path <> ".json")]
       ""
   return (x, pack path)
 
@@ -490,7 +625,7 @@ instance ToJSON StandardJSON where
                                    object ["content" .= src]]
            , "settings" .=
              object [ "outputSelection" .=
-                    object ["*" .= 
+                    object ["*" .=
                       object ["*" .= (toJSON
                               ["metadata" :: String,
                                "evm.bytecode",
@@ -502,14 +637,15 @@ instance ToJSON StandardJSON where
                                "evm.bytecode.generatedSources",
                                "evm.deployedBytecode.sourceMap",
                                "evm.deployedBytecode.linkReferences",
-                               "evm.deployedBytecode.generatedSources"
+                               "evm.deployedBytecode.generatedSources",
+                               "evm.deployedBytecode.immutableReferences"
                               ]),
                               "" .= (toJSON ["ast" :: String])
                              ]
                             ]
                     ]
            ]
-                               
+
 stdjson :: Language -> Text -> Text
 stdjson lang src = decodeUtf8 $ toStrict $ encode $ StandardJSON lang src
 
@@ -536,9 +672,9 @@ stripBytecodeMetadataSym :: [SWord 8] -> [SWord 8]
 stripBytecodeMetadataSym b =
   let
     concretes :: [Maybe Word8]
-    concretes = (fmap fromSized) <$> unliteral <$> b
+    concretes = (fmap fromSized) . unliteral <$> b
     bzzrs :: [[Maybe Word8]]
-    bzzrs = fmap (Just) <$> BS.unpack <$> knownBzzrPrefixes
+    bzzrs = fmap (Just) . BS.unpack <$> knownBzzrPrefixes
     candidates = (flip Data.List.isInfixOf concretes) <$> bzzrs
   in case elemIndex True candidates of
     Nothing -> b

@@ -1,6 +1,10 @@
 { pkgs }:
 
 let
+  solc-0_8_6 = "${pkgs.solc-static-versions.solc_0_8_6}/bin/solc-0.8.6";
+  solc-0_7_6 = "${pkgs.solc-static-versions.solc_0_7_6}/bin/solc-0.7.6";
+  solc-0_6_7 = "${pkgs.solc-static-versions.solc_0_6_7}/bin/solc-0.6.7";
+
   ds-test-src = pkgs.fetchFromGitHub {
     owner = "dapphub";
     repo = "ds-test";
@@ -55,6 +59,7 @@ let
     repo = "dss";
     rev = "36dab5c9fdce4fc36812e4fd8228be3beb18774d";
     sha256 = "1h82zw9qkb6wxwfc0ffz2lbmmmh0pj6s76jb23sqqcmy1wfnld1h";
+    fetchSubmodules = false;
   } + "/src";
 
   ds-test = pkgs.buildDappPackage {
@@ -71,6 +76,7 @@ let
   };
 
   ds-auth = pkgs.buildDappPackage {
+    solc = solc-0_7_6;
     src = ds-auth-src;
     name = "ds-auth";
     doCheck = false;
@@ -78,6 +84,7 @@ let
   };
 
   ds-token = pkgs.buildDappPackage {
+    solc = solc-0_7_6;
     src = ds-token-src;
     name = "ds-token";
     doCheck = false;
@@ -85,6 +92,7 @@ let
   };
 
   ds-note = pkgs.buildDappPackage {
+    solc = solc-0_6_7;
     src = ds-note-src;
     name = "ds-note";
     doCheck = false;
@@ -92,6 +100,7 @@ let
   };
 
   ds-thing = pkgs.buildDappPackage {
+    solc = solc-0_6_7;
     src = ds-thing-src;
     name = "ds-thing";
     doCheck = false;
@@ -99,6 +108,7 @@ let
   };
 
   ds-value = pkgs.buildDappPackage {
+    solc = solc-0_6_7;
     src = ds-value-src;
     name = "ds-value";
     doCheck = false;
@@ -106,8 +116,8 @@ let
   };
 
   runTest = { dir, shouldFail, name, dappFlags?"" }: pkgs.buildDappPackage {
-    name = name;
-    shouldFail = shouldFail;
+    inherit name shouldFail;
+    solc=solc-0_6_7;
     src = dir;
     dappFlags = "${dappFlags}";
     deps = [ ds-test ds-token ds-math ];
@@ -119,7 +129,19 @@ in
       dir = ./pass;
       name = "dappTestsShouldPass";
       shouldFail = false;
-      dappFlags = "--max-iterations 50";
+      dappFlags = "--max-iterations 50 --smttimeout 600000 --ffi";
+    };
+
+    libraries0_8 = pkgs.buildDappPackage {
+      name = "libraries-0.8";
+      shouldFail = false;
+      solc=solc-0_8_6;
+      src = pkgs.runCommand "src" {} ''
+        mkdir -p $out
+        cp ${./pass/libraries.sol} $out/libraries.sol;
+      '';
+      deps = [ ds-test ];
+      checkInputs = with pkgs; [ hevm jq seth dapp solc ];
     };
 
     shouldFail = let
@@ -127,7 +149,7 @@ in
         dir = ./fail;
         shouldFail = true;
         name = "dappTestsShouldFail-${match}";
-        dappFlags = "--match ${match}";
+        dappFlags = "--match ${match} --smttimeout 600000";
       };
     in pkgs.recurseIntoAttrs {
       prove-add = fail "prove_add";
@@ -137,12 +159,17 @@ in
       prove-mul = fail "prove_mul";
       prove-distributivity = fail "prove_distributivity";
       prove-transfer = fail "prove_transfer";
+      try-ffi = fail "testBadFFI";
+      invariant-first = fail "invariantFirst";
+      invariant-test-usr-bal = fail "invariantTestUserBal";
+      invariant-test-initial-inv-call = fail "invariantCount";
     };
 
     dss = pkgs.buildDappPackage {
+      solc = solc-0_6_7;
       src = dss-src;
       name = "dss";
-      doCheck = true;
+      dappFlags = "--match '[^dai].t.sol'";
       deps = [ ds-test ds-token ds-value ];
     };
   }

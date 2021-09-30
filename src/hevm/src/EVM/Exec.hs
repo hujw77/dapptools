@@ -35,11 +35,15 @@ vmForEthrunCreation creationCode =
     , vmoptDifficulty = 0
     , vmoptGas = 0xffffffffffffffff
     , vmoptGaslimit = 0xffffffffffffffff
+    , vmoptBaseFee = 0
+    , vmoptPriorityFee = 0
     , vmoptMaxCodeSize = 0xffffffff
-    , vmoptSchedule = FeeSchedule.istanbul
+    , vmoptSchedule = FeeSchedule.berlin
     , vmoptChainId = 1
     , vmoptCreate = False
     , vmoptStorageModel = ConcreteS
+    , vmoptTxAccessList = mempty
+    , vmoptAllowFFI = False
     }) & set (env . contracts . at ethrunAddress)
              (Just (initialContract (RuntimeCode mempty)))
 

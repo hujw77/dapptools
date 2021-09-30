@@ -15,20 +15,21 @@
 ###   Testing options:
 ### verbosity=<number>   verbosity of 'dapp test' output (0-3)
 ### v,verbose            sets verbosity to 1
-### vv                   sets verbosity to 2
-### vvv                  sets verbosity to 3
 ### fuzz-runs=<number>   number of times to run fuzzing tests
+### depth=<number>       number of transactions to sequence per invariant cycle
 ### replay=<string>      rerun a particular test case
 ### m,match=<string>     only run test methods matching regex
 ### cache=<string>       use the cache at directory
-###
+### ffi                  allow the use of the ffi cheatcode (WARNING: allows test authors to execute arbitrary code on your machine)
+### coverage             print coverage data
+
 ###   RPC options:
 ### rpc                  fetch remote state via ETH_RPC_URL
 ### rpc-url=<string>     fetch remote state via <url>
 ### rpc-block=<number>   block number (latest if not specified)
 ###
 ###   SMT options:
-### smttimeout=<number>        timeout passed to the smt solver in ms (default 30000)
+### smttimeout=<number>        timeout passed to the smt solver in ms (default 60000)
 ### solver=<string>            name of the smt solver to use (either 'z3' or 'cvc4')
 ### max-iterations=<number>    number of times we may revisit a particular branching point
 ### smtdebug                   print the SMT queries produced by hevm
@@ -61,12 +62,14 @@ extract              after building, write the .abi, .bin and .bin-runtime. Impl
   Testing options:
 verbosity=<number>   verbosity of 'dapp test' output (0-3)
 v,verbose            sets verbosity to 1
-vv                   sets verbosity to 2
-vvv                  sets verbosity to 3
 fuzz-runs=<number>   number of times to run fuzzing tests
+depth=<number>       number of transactions to sequence per invariant cycle
 replay=<string>      rerun a particular test case
 m,match=<string>     only run test methods matching regex
+cov-match=<string>   only print coverage for files matching regex
 cache=<string>       use the cache at directory
+ffi                  allow the use of the ffi cheatcode (WARNING: allows test authors to execute arbitrary code on your machine)
+coverage             print coverage data
 
   RPC options:
 rpc                  fetch remote state via ETH_RPC_URL
@@ -74,7 +77,7 @@ rpc-url=<string>     fetch remote state via <url>
 rpc-block=<number>   block number (latest if not specified)
 
   SMT options:
-smttimeout=<number>        timeout passed to the smt solver in ms (default 30000)
+smttimeout=<number>        timeout passed to the smt solver in ms (default 60000)
 solver=<string>            name of the smt solver to use (either 'z3' or 'cvc4')
 max-iterations=<number>    number of times we may revisit a particular branching point
 smtdebug                   print the SMT queries produced by hevm
@@ -98,14 +101,6 @@ dir=directory      testnet directory
 
 set -e
 
-export DAPP_SRC=${DAPP_SRC-src}
-export DAPP_LIB=${DAPP_LIB-lib}
-export DAPP_OUT=${DAPP_OUT-out}
-export DAPP_ABI_OUT=${DAPP_ABI_OUT-abi}
-export DAPP_JSON=${DAPP_JSON-${DAPP_OUT}/dapp.sol.json}
-export DAPP_ROOT=${DAPP_ROOT-.}
-export DAPP_FLAT=${DAPP_FLAT-flat}
-
 if ! [[ $DAPP_INIT ]]; then
   export DAPP_INIT=1
   # shellcheck source=/dev/null
@@ -113,6 +108,16 @@ if ! [[ $DAPP_INIT ]]; then
   # shellcheck source=/dev/null
   [[ $(pwd) != ~ && -e .dapprc ]] && . .dapprc
 fi
+
+export DAPP_SRC=${DAPP_SRC-src}
+export DAPP_LIB=${DAPP_LIB-lib}
+export DAPP_OUT=${DAPP_OUT-out}
+export DAPP_JSON=${DAPP_JSON-${DAPP_OUT}/dapp.sol.json}
+export DAPP_ROOT=${DAPP_ROOT-.}
+export DAPP_REMAPPINGS=${DAPP_REMAPPINGS-"$(dapp-remappings)"}
+export DAPP_ABI_OUT=${DAPP_ABI_OUT-abi}
+export DAPP_FLAT=${DAPP_FLAT-flat}
+
 
 if [[ $2 = --help ]]; then
   exec "${0##*/}" help -- "$1"
@@ -143,18 +148,20 @@ while [[ $1 ]]; do
 
     -m|--match)        shift; export DAPP_TEST_MATCH=$1;;
     -v|--verbose)             export DAPP_TEST_VERBOSITY=1;;
-    -vv)                      export DAPP_TEST_VERBOSITY=2;;
-    -vvv)                     export DAPP_TEST_VERBOSITY=3;;
+    --cov-match)       shift; export DAPP_TEST_COV_MATCH=$1;;
     --verbosity)       shift; export DAPP_TEST_VERBOSITY=$1;;
     --fuzz-runs)       shift; export DAPP_TEST_FUZZ_RUNS=$1;;
+    --depth)           shift; export DAPP_TEST_DEPTH=$1;;
 
     --smttimeout)      shift; export DAPP_TEST_SMTTIMEOUT=$1;;
     --solver)          shift; export DAPP_TEST_SOLVER=$1;;
     --max-iterations)  shift; export DAPP_TEST_MAX_ITERATIONS=$1;;
-    --smtdebug)               export DAPP_TEST_SMTDEBUG=$1;;
+    --smtdebug)               export DAPP_TEST_SMTDEBUG=1;;
+    --coverage)               export DAPP_TEST_COVERAGE=1;;
 
     --replay)          shift; export DAPP_TEST_REPLAY=$1;;
     --cache)           shift; export DAPP_TEST_CACHE=$1;;
+    --ffi)                    export DAPP_TEST_FFI=1;;
     --rpc-url)         shift; export HEVM_RPC=yes; export ETH_RPC_URL=$1;;
     --rpc-block)       shift; export HEVM_RPC=yes; export DAPP_TEST_NUMBER=$1;;
     --rpc)             [ -n "$ETH_RPC_URL" ] || fail "ETH_RPC_URL not set.";

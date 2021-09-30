@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2261
 set -e
 
 DAPP_TESTNET_RPC_PORT=${DAPP_TESTNET_RPC_PORT-8545}
 DAPP_TESTNET_RPC_ADDRESS=${DAPP_TESTNET_RPC_ADDRESS-127.0.0.1}
-DAPP_TESTNET_PERIOD=${DAPP_TESTNET_PEROID-0}
+DAPP_TESTNET_PERIOD=${DAPP_TESTNET_PERIOD-0}
 DAPP_TESTNET_CHAINID=${DAPP_TESTNET_CHAINID-99}
 DAPP_TESTNET_ACCOUNTS=${DAPP_TESTNET_ACCOUNTS-0}
 DAPP_TESTNET_gethdir=${DAPP_TESTNET_gethdir-$HOME/.dapp/testnet}
@@ -45,6 +46,8 @@ else
       -n 0 -i constantinopleBlock \
       -n 0 -i petersburgBlock \
       -n 0 -i istanbulBlock \
+      -n 0 -i berlinBlock \
+      -n 0 -i londonBlock \
       -n {} -n "$DAPP_TESTNET_PERIOD" -i period -n 3000 -i epoch -i clique \
       -i config \
     -s 0x1 -i difficulty \
@@ -74,7 +77,7 @@ set +m
 geth \
   2> >(tee "$chaindir/geth.log" | grep --line-buffered Success | sed 's/^/geth: /' >&2) \
   --datadir "$chaindir" --networkid "$DAPP_TESTNET_CHAINID" --port="$port" \
-  --mine --minerthreads=1 --allow-insecure-unlock \
+  --mine --miner.threads=1 --allow-insecure-unlock \
   --rpc --rpcapi "web3,eth,net,debug,personal" --rpccorsdomain '*' --nodiscover \
   --rpcaddr="$DAPP_TESTNET_RPC_ADDRESS" --rpcport="$DAPP_TESTNET_RPC_PORT" --unlock="$(IFS=,; echo "${address[*]}")" --password=<(exit) &
 

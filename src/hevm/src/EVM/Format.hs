@@ -5,16 +5,16 @@ module EVM.Format where
 
 import Prelude hiding (Word)
 import qualified EVM
-import EVM.Dapp (DappInfo (..), dappSolcByHash, dappAbiMap, showTraceLocation, dappEventMap)
+import EVM.Dapp (DappInfo (..), dappSolcByHash, dappAbiMap, showTraceLocation, dappEventMap, dappErrorMap)
 import EVM.Dapp (DappContext (..), contextInfo, contextEnv)
 import EVM.Concrete ( wordValue )
 import EVM (VM, VMResult(..), cheatCode, traceForest, traceData, Error (..), result)
 import EVM (Trace, TraceData (..), Log (..), Query (..), FrameContext (..), Storage(..))
 import EVM.SymExec
 import EVM.Symbolic (len, litWord)
-import EVM.Types (maybeLitWord, Word (..), Whiff(..), SymWord(..), W256 (..), num)
+import EVM.Types (maybeLitWord, Word (..), Whiff(..), SymWord(..), W256 (..), num, word)
 import EVM.Types (Addr, Buffer(..), ByteStringS(..))
-import EVM.ABI (AbiValue (..), Event (..), AbiType (..))
+import EVM.ABI (AbiValue (..), Event (..), AbiType (..), SolError (..))
 import EVM.ABI (Indexed (NotIndexed), getAbiSeq)
 import EVM.ABI (parseTypeName, formatString)
 import EVM.Solidity (SolcContract(..), contractName, abiMap)
@@ -30,7 +30,6 @@ import Data.ByteString.Lazy (toStrict, fromStrict)
 import Data.DoubleWord (signedWord)
 import Data.Foldable (toList)
 import Data.Maybe (catMaybes, fromMaybe)
-import Data.Monoid ((<>))
 import Data.Text (Text, pack, unpack, intercalate)
 import Data.Text (dropEnd, splitOn)
 import Data.Text.Encoding (decodeUtf8, decodeUtf8')
@@ -85,7 +84,7 @@ showAbiValue (AbiBytes _ bs) =
   formatBytes bs  -- opportunistically decodes recognisable strings
 showAbiValue (AbiAddress addr) =
   let dappinfo = view contextInfo ?context
-      contracts = view (contextEnv . EVM.contracts) ?context
+      contracts = view contextEnv ?context
       name = case (Map.lookup addr contracts) of
         Nothing -> ""
         Just contract ->
@@ -123,11 +122,15 @@ showCall ts (SymbolicBuffer bs) = showValues ts $ SymbolicBuffer (drop 4 bs)
 showCall ts (ConcreteBuffer bs) = showValues ts $ ConcreteBuffer (BS.drop 4 bs)
 
 showError :: (?context :: DappContext) => ByteString -> Text
-showError bs = case BS.take 4 bs of
-  -- Method ID for Error(string)
-  "\b\195y\160" -> showCall [AbiStringType] (ConcreteBuffer bs)
-  _             -> formatBinary bs
-
+showError bs =
+  let dappinfo = view contextInfo ?context
+      bs4 = BS.take 4 bs
+  in case Map.lookup (word bs4) (view dappErrorMap dappinfo) of
+      Just (SolError errName ts) -> errName <> " " <> showCall ts (ConcreteBuffer bs)
+      Nothing -> case bs4 of
+                  -- Method ID for Error(string)
+                  "\b\195y\160" -> showCall [AbiStringType] (ConcreteBuffer bs)
+                  _             -> formatBinary bs
 
 -- the conditions under which bytes will be decoded and rendered as a string
 isPrintable :: ByteString -> Bool
@@ -176,7 +179,7 @@ unindexed ts = [t | (t, NotIndexed) <- ts]
 
 showTrace :: DappInfo -> VM -> Trace -> Text
 showTrace dapp vm trace =
-  let ?context = DappContext { _contextInfo = dapp, _contextEnv = vm ^?! EVM.env }
+  let ?context = DappContext { _contextInfo = dapp, _contextEnv = vm ^?! EVM.env . EVM.contracts }
   in let
     pos =
       case showTraceLocation dapp trace of
@@ -248,10 +251,12 @@ showTrace dapp vm trace =
           "fetch contract " <> pack (show addr) <> pos
         PleaseFetchSlot addr slot _ ->
           "fetch storage slot " <> pack (show slot) <> " from " <> pack (show addr) <> pos
-        PleaseAskSMT _ _ _ ->
+        PleaseAskSMT {} ->
           "ask smt" <> pos
-        PleaseMakeUnique _ _ _ ->
+        PleaseMakeUnique {} ->
           "make unique value" <> pos
+        PleaseDoFFI cmd _ ->
+          "execute ffi " <> pack (show cmd) <> pos
 
     ErrorTrace e ->
       case e of
@@ -421,7 +426,7 @@ showStorage = fmap (\(k, v) -> show k <> " => " <> show v)
 
 showLeafInfo :: DappInfo -> BranchInfo -> [String]
 showLeafInfo srcInfo (BranchInfo vm _) = let
-  ?context = DappContext { _contextInfo = srcInfo, _contextEnv = vm ^?! EVM.env }
+  ?context = DappContext { _contextInfo = srcInfo, _contextEnv = vm ^?! EVM.env . EVM.contracts }
   in let
   self    = view (EVM.state . EVM.contract) vm
   updates = case view (EVM.env . EVM.contracts) vm ^?! ix self . EVM.storage of

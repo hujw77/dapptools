@@ -58,20 +58,25 @@ ghciTest root path statePath =
           facts <- Git.loadFacts (Git.RepoAt repoPath)
           pure (flip Facts.apply facts)
     params <- getParametersFromEnvironmentVariables Nothing
+    dapp <- loadDappInfo root path
     let
       opts = UnitTestOptions
         { oracle = EVM.Fetch.zero
         , verbose = Nothing
         , maxIter = Nothing
+        , askSmtIters = Nothing
         , smtTimeout = Nothing
         , smtState = Nothing
         , solver = Nothing
         , match = ""
+        , covMatch = Nothing
         , fuzzRuns = 100
         , replay = Nothing
         , vmModifier = loadFacts
-        , dapp = emptyDapp
+        , dapp = dapp
         , testParams = params
+        , maxDepth = Nothing
+        , ffiAllowed = False
         }
     readSolc path >>=
       \case
@@ -120,15 +125,19 @@ ghciTty root path statePath =
         { oracle = EVM.Fetch.zero
         , verbose = Nothing
         , maxIter = Nothing
+        , askSmtIters = Nothing
         , smtTimeout = Nothing
         , smtState = Nothing
         , solver = Nothing
         , match = ""
+        , covMatch = Nothing
         , fuzzRuns = 100
         , replay = Nothing
         , vmModifier = loadFacts
         , dapp = emptyDapp
         , testParams = params
+        , maxDepth = Nothing
+        , ffiAllowed = False
         }
     EVM.TTY.main testOpts root path
 
@@ -247,6 +256,8 @@ interpretWithTrace fetcher =
              State.state (runState m) >> interpretWithTrace fetcher (k ())
         EVM.Stepper.Ask _ ->
           error "cannot make choices with this interpretWithTraceer"
+        EVM.Stepper.IOAct m ->
+          m >>= interpretWithTrace fetcher . k
         EVM.Stepper.EVM m -> do
           r <- State.state (runState m)
           interpretWithTrace fetcher (k r)

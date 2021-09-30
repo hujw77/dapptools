@@ -13,7 +13,7 @@ import Brick.Widgets.List
 import EVM
 import EVM.ABI (abiTypeSolidity, decodeAbiValue, AbiType(..), emptyAbi)
 import EVM.SymExec (maxIterationsReached, symCalldata)
-import EVM.Dapp (DappInfo, dappInfo, Test, extractSig, Test(..))
+import EVM.Dapp (DappInfo, dappInfo, Test, extractSig, Test(..), srcMap)
 import EVM.Dapp (dappUnitTests, unitTestMethods, dappSolcByName, dappSolcByHash, dappSources)
 import EVM.Dapp (dappAstSrcMap)
 import EVM.Debug
@@ -32,7 +32,7 @@ import qualified Control.Monad.Operational as Operational
 
 import EVM.Fetch (Fetcher)
 
-import Control.Lens
+import Control.Lens hiding (List)
 import Control.Monad.Trans.Reader
 import Control.Monad.State.Strict hiding (state)
 
@@ -180,6 +180,10 @@ interpret mode =
           do m <- liftIO (?fetcher q)
              interpret mode (Stepper.evm m >>= k)
 
+        -- Stepper wants to make a query and wait for the results?
+        Stepper.IOAct q -> do
+          zoom uiVm (StateT (runStateT q)) >>= interpret mode . k
+
         -- Stepper wants to modify the VM.
         Stepper.EVM m -> do
           vm <- use uiVm
@@ -229,18 +233,22 @@ runFromVM maxIter' dappinfo oracle' vm = do
 
   let
     opts = UnitTestOptions
-      { oracle            = oracle'
-      , verbose           = Nothing
-      , maxIter           = maxIter'
-      , smtTimeout        = Nothing
-      , smtState          = Nothing
-      , solver            = Nothing
-      , match             = ""
-      , fuzzRuns          = 1
-      , replay            = error "irrelevant"
-      , vmModifier        = id
-      , testParams        = error "irrelevant"
-      , dapp              = dappinfo
+      { oracle        = oracle'
+      , verbose       = Nothing
+      , maxIter       = maxIter'
+      , askSmtIters   = Nothing
+      , smtTimeout    = Nothing
+      , smtState      = Nothing
+      , solver        = Nothing
+      , maxDepth      = Nothing
+      , match         = ""
+      , fuzzRuns      = 1
+      , replay        = error "irrelevant"
+      , vmModifier    = id
+      , testParams    = error "irrelevant"
+      , dapp          = dappinfo
+      , ffiAllowed    = False
+      , covMatch       = Nothing
       }
     ui0 = initUiVmState vm opts (void Stepper.execFully)
 
@@ -274,6 +282,7 @@ isFuzzTest :: (Test, [AbiType]) -> Bool
 isFuzzTest (SymbolicTest _, _) = False
 isFuzzTest (ConcreteTest _, []) = False
 isFuzzTest (ConcreteTest _, _) = True
+isFuzzTest (InvariantTest _, _) = True
 
 main :: UnitTestOptions -> FilePath -> FilePath -> IO ()
 main opts root jsonFilePath =
@@ -615,7 +624,9 @@ initialUiVmStateForTest
   -> IO UiVmState
 initialUiVmStateForTest opts@UnitTestOptions{..} (theContractName, theTestName) = do
   let state' = fromMaybe (error "Internal Error: missing smtState") smtState
-  (buf, len) <- flip runReaderT state' $ SBV.runQueryT $ symCalldata theTestName types []
+  (buf, len) <- case test of
+    SymbolicTest _ -> flip runReaderT state' $ SBV.runQueryT $ symCalldata theTestName types []
+    _ -> return (error "unreachable", error "unreachable")
   let script = do
         Stepper.evm . pushTrace . EntryTrace $
           "test " <> theTestName <> " (" <> theContractName <> ")"
@@ -631,7 +642,16 @@ initialUiVmStateForTest opts@UnitTestOptions{..} (theContractName, theTestName) 
             void (runUnitTest opts theTestName args)
           SymbolicTest _ -> do
             Stepper.evm $ modify symbolify
-            void (execSymTest opts theTestName (SymbolicBuffer buf, w256lit len)) -- S (Literal $ num len) (literal $ num len)))
+            void (execSymTest opts theTestName (SymbolicBuffer buf, w256lit len))
+          InvariantTest _ -> do
+            targets <- getTargetContracts opts
+            let randomRun = initialExplorationStepper opts theTestName [] targets (fromMaybe 20 maxDepth)
+            void $ case replay of
+              Nothing -> randomRun
+              Just (sig, cd) ->
+                if theTestName == sig
+                then initialExplorationStepper opts theTestName (decodeCalls cd) targets (length (decodeCalls cd))
+                else randomRun
   pure $ initUiVmState vm0 opts script
   where
     Just (test, types) = find (\(test',_) -> extractSig test' == theTestName) $ unitTestMethods testContract
@@ -849,19 +869,10 @@ isExecutionHalted :: UiVmState -> Pred VM
 isExecutionHalted _ vm = isJust (view result vm)
 
 currentSrcMap :: DappInfo -> VM -> Maybe SrcMap
-currentSrcMap dapp vm =
-  let
-    Just this = currentContract vm
-    i = (view opIxMap this) SVec.! (view (state . pc) vm)
-    h = view codehash this
-  in
-    case preview (dappSolcByHash . ix h) dapp of
-      Nothing ->
-        Nothing
-      Just (Creation, sol) ->
-        preview (creationSrcmap . ix i) sol
-      Just (Runtime, sol) ->
-        preview (runtimeSrcmap . ix i) sol
+currentSrcMap dapp vm = do
+  this <- currentContract vm
+  i <- (view opIxMap this) SVec.!? (view (state . pc) vm)
+  srcMap dapp this i
 
 drawStackPane :: UiVmState -> UiWidget
 drawStackPane ui =
@@ -910,7 +921,7 @@ drawBytecodePane ui =
                     else withDefAttr boldAttr (opWidget x))
       False
       (move $ list BytecodePane
-        (view codeOps (fromJust (currentContract vm)))
+        (maybe mempty (view codeOps) (currentContract vm))
         1)
 
 
@@ -976,22 +987,22 @@ solidityList vm dapp' =
 drawSolidityPane :: UiVmState -> UiWidget
 drawSolidityPane ui =
   let dapp' = dapp (view uiTestOpts ui)
+      dappSrcs = view dappSources dapp'
       vm = view uiVm ui
   in case currentSrcMap dapp' vm of
     Nothing -> padBottom Max (hBorderWithLabel (txt "<no source map>"))
     Just sm ->
-      case view (dappSources . sourceLines . at (srcMapFile sm)) dapp' of
-        Nothing -> padBottom Max (hBorderWithLabel (txt "<source not found>"))
-        Just rows ->
           let
+            rows = (_sourceLines dappSrcs) !! srcMapFile sm
             subrange = lineSubrange rows (srcMapOffset sm, srcMapLength sm)
             fileName :: Maybe Text
             fileName = preview (dappSources . sourceFiles . ix (srcMapFile sm) . _1) dapp'
-            lineNo =
-              (snd . fromJust $
+            lineNo :: Maybe Int
+            lineNo = maybe Nothing (\a -> Just (a - 1))
+              (snd <$>
                 (srcMapCodePos
                  (view dappSources dapp')
-                 sm)) - 1
+                 sm))
           in vBox
             [ hBorderWithLabel $
                 txt (fromMaybe "<unknown>" fileName)
@@ -1016,7 +1027,7 @@ drawSolidityPane ui =
                                   , withHighlight False (txt z)
                                   ])
                 False
-                (listMoveTo lineNo
+                ((maybe id listMoveTo lineNo)
                   (solidityList vm dapp'))
             ]
 
