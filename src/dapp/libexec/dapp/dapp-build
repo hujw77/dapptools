@@ -38,6 +38,7 @@ print }'
 
 cd "$DAPP_ROOT"
 
+export DAPP_REMAPPINGS=${DAPP_REMAPPINGS-"$(dapp-remappings)"}
 # use a custom path is DAPP_SOLC is set
 export SOLC=${DAPP_SOLC:-solc}
 
