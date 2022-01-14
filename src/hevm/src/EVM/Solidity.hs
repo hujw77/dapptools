@@ -58,6 +58,7 @@ module EVM.Solidity
   , lineSubrange
   , astIdMap
   , astSrcMap
+  , containsLinkerHole
 ) where
 
 import EVM.ABI
@@ -449,10 +450,13 @@ mkEventMap abis = Map.fromList $
        (case abi ^?! key "anonymous" . _Bool of
          True -> Anonymous
          False -> NotAnonymous)
-       (map (\y -> ( force "internal error: type" (parseTypeName' y)
-     , if y ^?! key "indexed" . _Bool
-       then Indexed
-       else NotIndexed ))
+       (map (\y ->
+        ( y ^?! key "name" . _String
+        , force "internal error: type" (parseTypeName' y)
+        , if y ^?! key "indexed" . _Bool
+          then Indexed
+          else NotIndexed
+        ))
        (toList $ abi ^?! key "inputs" . _Array))
      )
   in f <$> relevant
@@ -532,10 +536,15 @@ parseMethodInput x =
   , force "internal error: method type" (parseTypeName' x)
   )
 
+containsLinkerHole :: Text -> Bool
+containsLinkerHole = regexMatches "__\\$[a-z0-9]{34}\\$__"
+
 toCode :: Text -> ByteString
 toCode t = case BS16.decode (encodeUtf8 t) of
   Right d -> d
-  Left e -> error e
+  Left e -> if containsLinkerHole t
+            then error "unlinked libraries detected in bytecode"
+            else error e
 
 solidity' :: Text -> IO (Text, Text)
 solidity' src = withSystemTempFile "hevm.sol" $ \path handle -> do

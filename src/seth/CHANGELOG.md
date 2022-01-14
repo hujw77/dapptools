@@ -4,10 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.12.0] - 2021-11-12
 
 ### Changed
 
+- `bytesX` arguments to `seth calldata` are automatically padded
 - `seth 4byte` command returns the response from querying [4byte.directory](https://www.4byte.directory/) for a given function signature
 - `seth 4byte-decode` command queries 4byte.directory for matching function signatures, uses one to decode the calldata, and prints the decoded calldata
 - `seth 4byte-event` command returns the response from querying 4byte.directory for a given event topic
@@ -20,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Address lookup no longer fails if `ETH_RPC_ACCOUNTS` is set, and `ETH_FROM` is an unchecksummed address
 - Contract creations with Dynamic fee transactions
+- `seth debug` correctly executes transactions
+- `seth chain` correctly identifies `optimism-mainnet` and `optimism-kovan` post regenesis
 
 ## [0.11.0] - 2021-09-08
 

@@ -40,7 +40,7 @@ Note: some `hevm` commands (`dapp-test`) assume the use of the `ds-test` framewo
 - `0`: choose the branch which does not jump
 - `1`: choose the branch which does jump
 - `N`: step to the next source position
-- `P`: step previous source instruction
+- `P`: step previous source position
 - `C-n`: step to the next source position and don't enter `CALL` or `CREATE`
 - `C-p`: step previous source position without entering
 - `m`: toggle memory view
@@ -118,7 +118,7 @@ Counterexamples will be returned for any reachable assertion violations. Where a
 violation is defined as either an execution of the invalid opcode (`0xfe`), or a revert with a
 message of the form `abi.encodeWithSelector('Panic(uint256)', errCode)` with `errCode` being one of
 the predefined solc assertion codes defined
-[here](https://docs.soliditylang.org/en/v0.8.6/control-structures.html?highlight=Panic#panic-via-assert-and-error-via-require).
+[here](https://docs.soliditylang.org/en/latest/control-structures.html#panic-via-assert-and-error-via-require).
 
 By default hevm ignores assertion violations that result from arithmetic overflow (`Panic(0x11)`),
 although this behaviour can be customised via the `--assertions` flag. For example, the following
@@ -341,7 +341,7 @@ These can be accessed by calling into a contract (typically called `Hevm`) at ad
   `BadCheatCode` as `0` is an invalid ECDSA private key.
 
 - `function ffi(string[] calldata) external returns (bytes memory)`
-  Executes the arguments as a command in the system shell and returns stdout. Note that this
+  Executes the arguments as a command in the system shell and returns stdout. Expects abi encoded values to be returned from the shell or an error will be thrown. Note that this
   cheatcode means test authors can execute arbitrary code on user machines as part of a call to `dapp test`, for this reason all calls to `ffi` will fail unless the `--ffi` flag is passed.
 
 ## Contact

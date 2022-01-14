@@ -30,6 +30,7 @@ that isn't available in `rpc`, such as [fuzz testing](#property-based-testing), 
   - [`dapp create`](#dapp-create)
   - [`dapp address`](#dapp-address)
   - [`dapp install`](#dapp-install)
+  - [`dapp uninstall`](#dapp-uninstall)
   - [`dapp update`](#dapp-update)
   - [`dapp upgrade`](#dapp-upgrade)
   - [`dapp testnet`](#dapp-testnet)
@@ -176,7 +177,7 @@ We can symbolically explore all possibilities to find the one that lets us withd
 
 ```solidity
 function proveFail_withdraw(uint guess) public {
-    address(dapptutorial).transfer(1 ether);
+    payable(address(dapptutorial)).transfer(1 ether);
     uint preBalance = address(this).balance;
     dapptutorial.withdraw(guess);
     uint postBalance = address(this).balance;
@@ -223,6 +224,19 @@ function invariant_totalSupply() public {
 ```
 
 If a counterexample is found, it can be replayed or analyzed in the debugger using the `--replay` flag.
+
+### SMTChecker testing
+
+If you are using the standard JSON input mode and its field `settings.modelChecker.engine` is `all`, `bmc` or `chc`, [Solidity's SMTChecker](https://docs.soliditylang.org/en/latest/smtchecker.html) will be invoked when you run `dapp build`.
+If you wish to use that mode, these steps are recommended:
+
+- Run the usual compilation
+- Generate a separate input JSON with the SMTChecker enabled: `export DAPP_SMTCHECKER=1 && dapp mk-standard-json &> dapp_smtchecker.json`
+- Modify `settings.modelChecker` in the new JSON input accordingly. It is recommended that you use the [contracts field](https://docs.soliditylang.org/en/latest/smtchecker.html#verified-contracts) `settings.modelChecker.contracts` to specify the main contracts you want to verify.
+- Tell `dapp` to use the new JSON as input: `export DAPP_STANDARD_JSON=./dapp_smtchecker.json`
+- Run `dapp build`
+
+You may also want to change the `settings.modelChecker.timeout` and/or other fields in different runs.
 
 ### Testing against RPC state
 
@@ -296,6 +310,7 @@ variables](../hevm/README.md#environment-variables).
 | `DAPP_VERIFY_CONTRACT`     | `yes`                      | Attempt Etherscan verification                                                                                                                     |
 | `DAPP_ASYNC`               | n/a                        | Set to `yes` to skip waiting for etherscan verification to succeed                                                                                 |
 | `DAPP_STANDARD_JSON`       | `$(dapp mk-standard-json)` | [Solidity compilation options](https://docs.soliditylang.org/en/latest/using-the-compiler.html#compiler-input-and-output-json-description)         |
+| `DAPP_SMTCHECKER`          | n/a                        | Set to `1` to output the default model checker settings when using `dapp mk-standard-json`. Running `dapp build` will invoke the SMTChecker.       |
 | `DAPP_REMAPPINGS`          | `$(dapp remappings)`       | [Solidity remappings](https://docs.soliditylang.org/en/latest/using-the-compiler.html#path-remapping)                                              |
 | `DAPP_BUILD_OPTIMIZE`      | `0`                        | Activate Solidity optimizer (`0` or `1`)                                                                                                           |
 | `DAPP_BUILD_OPTIMIZE_RUNS` | `200`                      | Set the optimizer runs                                                                                                                             |
@@ -531,12 +546,32 @@ If the project you want to install does not follow the typical `dapp` project st
 you may need to configure the `DAPP_REMAPPINGS` environment variable to be able to find
 it. For an example, see [this repo](https://github.com/dapp-org/radicle-contracts-tests/).
 
+
+### `dapp uninstall`
+
+    dapp-uninstall -- remove a smart contract library
+    Usage: dapp uninstall <lib>
+
 ### `dapp update`
 
     dapp-update -- fetch all upstream lib changes
     Usage: dapp update [<lib>]
 
 Updates a project submodule in the `lib` subdirectory.
+
+### `dapp snapshot`
+
+    dapp-snapshot -- creates a snapshot of each test's gas usage
+    Usage: dapp snapshot
+
+Saves a snapshot of each concrete test's gas usage in a `.gas-snapshot` file.
+
+### `dapp check-snapshot`
+
+    dapp-check-snapshot -- check snapshot is up to date
+    Usage: dapp check-snapshot
+
+Runs `dapp snapshot` and exits with an error code if its output does not match the current `.gas-snapshot` file.
 
 ### `dapp upgrade`
 
@@ -551,7 +586,7 @@ Spins up a geth testnet.
 
     dapp-verify-contract -- verify contract source on etherscan
     Usage: dapp verify-contract <path>:<contractname> <address> [constructorArgs]
-    
+
 Example: `dapp verify-contract src/auth/authorities/RolesAuthority.sol:RolesAuthority 0x9ed0e..`
 
 Requires `ETHERSCAN_API_KEY` to be set.
@@ -571,3 +606,4 @@ The following environment variables can be used to override settings:
 - `DAPP_BUILD_OPTIMIZE`
 - `DAPP_BUILD_OPTIMIZE_RUNS`
 - `DAPP_LIBRARIES`
+- `DAPP_SMTCHECKER`

@@ -36,6 +36,8 @@ import qualified Data.ByteString      as BS
 import qualified Data.Serialize.Get   as Cereal
 import qualified Data.Text            as Text
 import qualified Data.Text.Encoding   as Text
+import qualified Data.Sequence        as Seq
+import qualified Text.Regex.TDFA      as Regex
 import qualified Text.Read
 
 -- Some stuff for "generic programming", needed to create Word512
@@ -461,6 +463,9 @@ padLeft n xs = BS.replicate (n - BS.length xs) 0 <> xs
 padRight :: Int -> ByteString -> ByteString
 padRight n xs = xs <> BS.replicate (n - BS.length xs) 0
 
+padRight' :: Int -> String -> String
+padRight' n xs = xs <> replicate (n - length xs) '0'
+
 -- | Right padding  / truncating
 truncpad :: Int -> [SWord 8] -> [SWord 8]
 truncpad n xs = if m > n then take n xs
@@ -553,6 +558,18 @@ abiKeccak =
     >>> BS.unpack
     >>> word32
 
+-- Utils
 
 concatMapM :: Monad m => (a -> m [b]) -> [a] -> m [b]
 concatMapM f xs = liftM concat (mapM f xs)
+
+regexMatches :: Text -> Text -> Bool
+regexMatches regexSource =
+  let
+    compOpts =
+      Regex.defaultCompOpt { Regex.lastStarGreedy = True }
+    execOpts =
+      Regex.defaultExecOpt { Regex.captureGroups = False }
+    regex = Regex.makeRegexOpts compOpts execOpts (Text.unpack regexSource)
+  in
+    Regex.matchTest regex . Seq.fromList . Text.unpack

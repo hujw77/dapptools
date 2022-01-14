@@ -38,7 +38,7 @@ import EVM.Types hiding (word)
 import EVM.UnitTest (UnitTestOptions, coverageReport, coverageForUnitTestContract)
 import EVM.UnitTest (runUnitTestContract)
 import EVM.UnitTest (getParametersFromEnvironmentVariables, testNumber)
-import EVM.Dapp (findUnitTests, dappInfo, DappInfo, emptyDapp, regexMatches)
+import EVM.Dapp (findUnitTests, dappInfo, DappInfo, emptyDapp)
 import EVM.Format (showTraceTree, showTree', renderTree, showBranchInfoWithAbi, showLeafInfo)
 import EVM.RLP (rlpdecode)
 import qualified EVM.Patricia as Patricia
@@ -198,7 +198,7 @@ data Command w
       , maxIterations :: w ::: Maybe Integer            <?> "Number of times we may revisit a particular branching point"
       , askSmtIterations :: w ::: Maybe Integer         <?> "Number of times we may revisit a particular branching point before we consult the smt solver to check reachability (default: 5)"
       }
-  | BcTest -- Run an Ethereum Blockhain/GeneralState test
+  | BcTest -- Run an Ethereum Blockchain/GeneralState test
       { file      :: w ::: String    <?> "Path to .json test file"
       , test      :: w ::: [String]  <?> "Test case filter - only run specified test method(s)"
       , debug     :: w ::: Bool      <?> "Run interactively"
@@ -206,7 +206,7 @@ data Command w
       , diff      :: w ::: Bool      <?> "Print expected vs. actual state on failure"
       , timeout   :: w ::: Maybe Int <?> "Execution timeout (default: 10 sec.)"
       }
-  | Compliance -- Run Ethereum Blockhain compliance report
+  | Compliance -- Run Ethereum Blockchain compliance report
       { tests   :: w ::: String       <?> "Path to Ethereum Tests directory"
       , group   :: w ::: Maybe String <?> "Report group to run: VM or Blockchain (default: Blockchain)"
       , match   :: w ::: Maybe String <?> "Test case filter - only run methods matching regex"

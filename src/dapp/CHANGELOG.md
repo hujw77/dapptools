@@ -5,11 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.35.0] - 2021-11-12
 
 ### Added
 
 - The output from `dapp build` now uses color to differentiate warnings and errors
+- Support for solc 0.8.9/0.8.8
+
+- `dapp snapshot` and `dapp check-snapshot` commands to snapshot test gas usage.
 
 ### Changed
 
