@@ -46,6 +46,7 @@ case "$chain" in
   heco)
     export ETHERSCAN_API_URL=https://api.hecoinfo.com/api
     export ETHERSCAN_URL=https://hecoinfo.com/address
+    ;;
   optimism-mainnet)
     export ETHERSCAN_API_URL=https://api-optimistic.etherscan.io/api
     export ETHERSCAN_URL=https://optimistic.etherscan.io/address
@@ -62,7 +63,6 @@ case "$chain" in
     export ETHERSCAN_API_URL=https://api-testnet.polygonscan.com/api
     export ETHERSCAN_URL=https://mumbai.polygonscan.com/address
     ;;
-  *)
   fantom)
     export ETHERSCAN_API_URL=https://api.ftmscan.com/api
     export ETHERSCAN_URL=https://ftmscan.com/address
