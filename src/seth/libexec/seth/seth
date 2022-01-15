@@ -264,12 +264,6 @@ if [[ $SETH_CHAIN ]]; then
       eth_rpc_url=https://matic-mumbai.chainstacklabs.com
       export ETHERSCAN_API_URL=https://api-testnet.polygonscan.com/api
       ;;
-    local-evm)
-      eth_rpc_port=http://127.0.0.1:8545
-      ;;
-    local-dvm)
-      eth_rpc_port=http://127.0.0.1:9933
-      ;;
     *)
       echo >&2 "${0##*/}: error: unknown chain: \\'$SETH_CHAIN'"
       exit 1
