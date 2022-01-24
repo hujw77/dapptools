@@ -59,7 +59,7 @@ case "$chain" in
   polygon)
     URL="${ETHERSCAN_API_URL:-https://api.polygonscan.com}"
     ;;
-  polygon-mumbai)
+  mumbai)
     URL="${ETHERSCAN_API_URL:-https://api-testnet.polygonscan.com}"
     ;;
   fantom)

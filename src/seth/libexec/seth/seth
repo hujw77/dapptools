@@ -260,7 +260,7 @@ if [[ $SETH_CHAIN ]]; then
       eth_rpc_url=https://polygon-rpc.com
       export ETHERSCAN_API_URL=https://api.polygonscan.com/api
       ;;
-    polygon-mumbai)
+    mumbai)
       eth_rpc_url=https://matic-mumbai.chainstacklabs.com
       export ETHERSCAN_API_URL=https://api-testnet.polygonscan.com/api
       ;;
