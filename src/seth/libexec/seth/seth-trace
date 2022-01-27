@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -e
+jshon+=(-s "$1" -i append)
+jshon+=(-n {})
+jshon+=(-s "callTracer" -i tracer)
+jshon+=(-i append)
+seth rpc debug_traceTransaction -- "${jshon[@]}"
