@@ -256,6 +256,9 @@ if [[ $SETH_CHAIN ]]; then
     crab)
       eth_rpc_url=https://crab-rpc.darwinia.network
       ;;
+    crabtest)
+      eth_rpc_url=https://crab-rpc.darwinia.network
+      ;;
     polygon)
       eth_rpc_url=https://polygon-rpc.com
       export ETHERSCAN_API_URL=https://api.polygonscan.com/api
