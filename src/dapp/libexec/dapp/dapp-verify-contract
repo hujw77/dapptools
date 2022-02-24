@@ -96,7 +96,7 @@ address=${2?contractaddress}
 if [[ $(jq .sourceList "$DAPP_JSON") == null && -z "$DAPP_BUILD_LEGACY" ]]; then
     contract=$(<"$DAPP_JSON" jq -r ".contracts[\"${path/:*/}\"][\"$name\"]")
     meta=$(<"$DAPP_JSON" jshon -e contracts -e "${path/:*/}" -e "$name" -e metadata -u)
-else 
+else
     contract=$(<"$DAPP_JSON" jq -r ".contracts[\"$path\"]")
     meta=$(jshon <<<"$contract" -e metadata -u)
 fi
