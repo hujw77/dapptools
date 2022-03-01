@@ -59,10 +59,15 @@ if [[ -z "$DAPP_BUILD_LEGACY" && -z "$DAPP_BUILD_EXTRACT" ]]; then
   [[ $DAPP_VERIFY_CONTRACT ]] && {
     echo >&2 "Verifying contract at $address"
     sleep 5 # give etherscan some time to process the block
-    dapp verify-contract "$path":"${1#*:}" "$address" "${@:2}"
+    if [ "$(seth chain-id)" == "44" ]
+    then
+      dapp verify-contract-subscan "$path":"${1#*:}" "$address" "${@:2}"
+    else
+      dapp verify-contract "$path":"${1#*:}" "$address" "${@:2}"
+    fi
   }
   seth --to-checksum-address "$address"
-else 
+else
   contract=$(<"$DAPP_JSON" jq '.contracts[''"'"${name[0]}"'"'']')
   abi=$(jq '.["abi"]' -r <<< "$contract")
   bin=$(jq '.["bin"]' -r <<< "$contract")
@@ -71,7 +76,12 @@ else
   [[ $DAPP_VERIFY_CONTRACT ]] && {
     echo >&2 "Verifying contract at $address"
     sleep 5 # give etherscan some time to process the block
-    dapp verify-contract "$1" "$address" "${@:2}" || true
+    if [ "$(seth chain-id)" == "44" ]
+    then
+      dapp verify-contract-subscan "$1" "$address" "${@:2}" || true
+    else
+      dapp verify-contract "$1" "$address" "${@:2}" || true
+    fi
   }
   seth --to-checksum-address "$address"
 fi
