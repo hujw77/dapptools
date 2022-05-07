@@ -4,6 +4,91 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2021-11-12
+
+### Changed
+
+- `bytesX` arguments to `seth calldata` are automatically padded
+- `seth 4byte` command returns the response from querying [4byte.directory](https://www.4byte.directory/) for a given function signature
+- `seth 4byte-decode` command queries 4byte.directory for matching function signatures, uses one to decode the calldata, and prints the decoded calldata
+- `seth 4byte-event` command returns the response from querying 4byte.directory for a given event topic
+- `seth abi-encode` command returns the ABI encoded values without the function signature
+- `seth index` command returns the slot number for the specified mapping type and input data
+- `seth --from-fix` command converts fixed point numbers into parsed integers with the specified number of decimals
+- `seth run-tx` now fetches contract source from etherscan if `ETHERSCAN_API_KEY` is set
+
+### Fixed
+
+- Address lookup no longer fails if `ETH_RPC_ACCOUNTS` is set, and `ETH_FROM` is an unchecksummed address
+- Contract creations with Dynamic fee transactions
+- `seth debug` correctly executes transactions
+- `seth chain` correctly identifies `optimism-mainnet` and `optimism-kovan` post regenesis
+
+## [0.11.0] - 2021-09-08
+
+### Added
+
+- `seth basefee` command returns basefee for the latest block, or any block with `[blocknumber]` parameter
+- `seth namehash <name>` to get the ENS namehash of a name
+- `seth resolve-name <name>` to resolve an ENS name to an address
+- `seth lookup-address <address>` to lookup the ENS name an address reverse resolves to
+- Dynamic transaction fee format transactions (EIP-1559) supported by introducing the flag `--prio-fee` and corresponding environment variable `ETH_PRIO_FEE` to seth and ethsign. If `--prio-fee` is provided (or `ETH_PRIO_FEE`) is set, 1559 transaction will be used and `--gas-price` will reflect the maximum gas price, rather than the absolute gas price.
+- If `ETH_RPC_ACCOUNTS` is set and the account corresponding to `ETH_FROM` exists in the keystore,
+Seth will sign the transaction locally and then publish it signed (previously it'd always send it to the node)
+
+### Changed
+
+- `--gas-price` will be used as `max-fee` when `--prio-fee` is set
+- [BREAKING] seth will no longer search Parity / OpenEthereum related keystores by default. These
+    keystores can still be searched by setting the `ETH_KEYSTORE` environment variable.
+
+### Fixed
+
+- Fix `--use` bug
+- `seth bundle-source` writes the contents of standard-json to the current directory to enable better sourcemaps for multi-file etherscan source code.
+- `seth estimate` no longer sets a gas limit when estimating gas
+
+## [0.10.1] - 2021-03-22
+
+### Added
+
+- Thanks to an upgrade in ethsign, seth is more likely to find your ledger live
+account without having to set `ETH_HDPATH`.
+
+### Changed
+
+- updated `nixpkgs` to the `20.09` channel
+
+### Fixed
+
+- `seth calldata` returns correct abiencoding
+
+## [0.10.0] - 2021-01-26
+
+### Changed
+
+- `seth combined-json` was renamed to `seth-solc` and invokes `solc`
+  using the `--standard-json` input.
+- `seth bundle-source` correctly interprets etherscan sources using
+  standard json
+- the `--gas-price` argument can optionally accept a `gwei` suffix
+  i.e. `seth call --gas-price 100gwei ...`
+
+## [0.9.4] - 2020-12-10
+
+### Added
+
+- `seth --use` can find solc versions in the nix store even if they are not present on `PATH`
+
+### Fixed
+
+- Correct help text for `seth --use`
+
+## [0.9.3] - 2020-11-29
+
+- `seth --use` searches directly for binaries in your path, rather than
+  using `nix run`, giving a significant speed boost.
+
 ## [0.9.2] - 2020-10-31
 
 ### Added
@@ -12,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.1] - 2020-08-19
 
 ### Added
-- New commands: 
+- New commands:
   - `seth source <address>` fetches the contract source from etherscan
   - `seth bundle-source <address>` fetches contract source and compiles to combined json
   - `seth run-tx <tx-hash> [--debug, --source <file>, --state <repository>]`,

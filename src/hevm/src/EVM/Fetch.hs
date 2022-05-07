@@ -6,10 +6,10 @@ module EVM.Fetch where
 
 import Prelude hiding (Word)
 
-import EVM.Types    (Addr, W256, hexText)
-import EVM.Concrete (Word, w256)
+import EVM.ABI
+import EVM.Types    (Addr, w256, W256, hexText, Word, Buffer(..))
 import EVM.Symbolic (litWord)
-import EVM          (EVM, Contract, Block, initialContract, nonce, balance, external)
+import EVM          (IsUnique(..), EVM, Contract, Block, initialContract, nonce, balance, external)
 import qualified EVM.FeeSchedule as FeeSchedule
 
 import qualified EVM
@@ -22,16 +22,20 @@ import qualified Data.SBV.Internals as SBV
 import Data.SBV.Trans hiding (Word)
 import Data.Aeson
 import Data.Aeson.Lens
-import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Data.Text (Text, unpack, pack)
+import Data.Maybe (fromMaybe)
+
+import qualified Data.Vector as RegularVector
 import Network.Wreq
 import Network.Wreq.Session (Session)
+import System.Process
 
 import qualified Network.Wreq.Session as Session
 
 -- | Abstract representation of an RPC fetch request
 data RpcQuery a where
-  QueryCode    :: Addr         -> RpcQuery ByteString
+  QueryCode    :: Addr         -> RpcQuery BS.ByteString
   QueryBlock   ::                 RpcQuery Block
   QueryBalance :: Addr         -> RpcQuery W256
   QueryNonce   :: Addr         -> RpcQuery W256
@@ -104,8 +108,10 @@ parseBlock j = do
   timestamp  <- litWord . readText <$> j ^? key "timestamp" . _String
   number     <- readText <$> j ^? key "number" . _String
   difficulty <- readText <$> j ^? key "difficulty" . _String
+  gasLimit   <- readText <$> j ^? key "gasLimit" . _String
+  let baseFee = readText <$> j ^? key "baseFeePerGas" . _String
   -- default codesize, default gas limit, default feescedule
-  return $ EVM.Block coinbase timestamp number difficulty 0xffffffff 0xffffffff FeeSchedule.istanbul
+  return $ EVM.Block coinbase timestamp number difficulty gasLimit (fromMaybe 0 baseFee) 0xffffffff FeeSchedule.berlin
 
 fetchWithSession :: Text -> Session -> Value -> IO (Maybe Value)
 fetchWithSession url sess x = do
@@ -124,7 +130,7 @@ fetchContractWithSession n url addr sess = runMaybeT $ do
   theBalance <- MaybeT $ fetch (QueryBalance addr)
 
   return $
-    initialContract (EVM.RuntimeCode theCode)
+    initialContract (EVM.RuntimeCode (ConcreteBuffer theCode))
       & set nonce    (w256 theNonce)
       & set balance  (w256 theBalance)
       & set external True
@@ -165,6 +171,13 @@ zero = oracle Nothing Nothing True
 oracle :: Maybe SBV.State -> Maybe (BlockNumber, Text) -> Bool -> Fetcher
 oracle smtstate info ensureConsistency q = do
   case q of
+    EVM.PleaseDoFFI vals continue -> case vals of
+       cmd : args -> do
+          (_, stdout', _) <- readProcessWithExitCode cmd args ""
+          pure . continue . encodeAbiValue $
+            AbiTuple (RegularVector.fromList [ AbiBytesDynamic . hexText . pack $ stdout'])
+       _ -> error (show vals)
+
     EVM.PleaseAskSMT branchcondition pathconditions continue ->
       case smtstate of
         Nothing -> return $ continue EVM.Unknown
@@ -183,29 +196,34 @@ oracle smtstate info ensureConsistency q = do
         Just x -> case model of
           EVM.ConcreteS -> return $ continue x
           EVM.InitialS  -> return $ continue $ x
-             & set EVM.storage (EVM.Symbolic $ SBV.sListArray 0 [])
+             & set EVM.storage (EVM.Symbolic [] $ SBV.sListArray 0 [])
           EVM.SymbolicS -> case smtstate of
             Nothing -> return (continue $ x
-                               & set EVM.storage (EVM.Symbolic $ SBV.sListArray 0 []))
+                               & set EVM.storage (EVM.Symbolic [] $ SBV.sListArray 0 []))
 
             Just state ->
               flip runReaderT state $ SBV.runQueryT $ do
                 store <- freshArray_ Nothing
                 return $ continue $ x
-                  & set EVM.storage (EVM.Symbolic store)
+                  & set EVM.storage (EVM.Symbolic [] store)
         Nothing -> error ("oracle error: " ++ show q)
 
     EVM.PleaseMakeUnique val pathconditions continue ->
           case smtstate of
-            Nothing -> return $ continue Nothing
+            Nothing -> return $ continue Multiple
             Just state -> flip runReaderT state $ SBV.runQueryT $ do
-              constrain $ sAnd $ pathconditions <> [val .== val]
+              constrain $ sAnd $ pathconditions <> [val .== val] -- dummy proposition just to make sure `val` is defined when we do `getValue` later.
               checkSat >>= \case
-                Sat -> do val' <- getValue val
-                          checksat (val ./= literal val') >>= \case
-                            Unsat -> pure $ continue $ Just val'
-                            _ -> pure $ continue Nothing
-                _ -> pure $ continue Nothing
+                Sat -> do
+                  val' <- getValue val
+                  s    <- checksat (val ./= literal val')
+                  case s of
+                    Unsat -> pure $ continue $ Unique val'
+                    _ -> pure $ continue Multiple
+                Unsat -> pure $ continue InconsistentU
+                Unk -> pure $ continue TimeoutU
+                DSat _ -> error "unexpected DSAT"
+
 
     EVM.PleaseFetchSlot addr slot continue ->
       case info of

@@ -21,7 +21,7 @@ ethrunAddress = Addr 0x00a329c0648769a73afac7f9381e08fb43dbea72
 vmForEthrunCreation :: ByteString -> VM
 vmForEthrunCreation creationCode =
   (makeVm $ VMOpts
-    { vmoptContract = initialContract (InitCode creationCode)
+    { vmoptContract = initialContract (InitCode (ConcreteBuffer creationCode))
     , vmoptCalldata = (mempty, 0)
     , vmoptValue = 0
     , vmoptAddress = createAddress ethrunAddress 1
@@ -35,11 +35,15 @@ vmForEthrunCreation creationCode =
     , vmoptDifficulty = 0
     , vmoptGas = 0xffffffffffffffff
     , vmoptGaslimit = 0xffffffffffffffff
+    , vmoptBaseFee = 0
+    , vmoptPriorityFee = 0
     , vmoptMaxCodeSize = 0xffffffff
-    , vmoptSchedule = FeeSchedule.istanbul
+    , vmoptSchedule = FeeSchedule.berlin
     , vmoptChainId = 1
     , vmoptCreate = False
     , vmoptStorageModel = ConcreteS
+    , vmoptTxAccessList = mempty
+    , vmoptAllowFFI = False
     }) & set (env . contracts . at ethrunAddress)
              (Just (initialContract (RuntimeCode mempty)))
 

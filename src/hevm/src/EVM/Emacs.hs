@@ -21,12 +21,10 @@ import Data.Text (Text, pack, unpack)
 import Data.SBV hiding (Word, output)
 import EVM
 import EVM.ABI
-import EVM.Concrete
 import EVM.Symbolic
 import EVM.Dapp
 import EVM.Debug (srcMapCodePos)
 import EVM.Fetch (Fetcher)
-import EVM.Op
 import EVM.Solidity
 import EVM.Stepper (Stepper)
 import EVM.TTY (currentSrcMap)
@@ -39,7 +37,6 @@ import qualified Control.Monad.Operational as Operational
 import qualified Data.List as List
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import qualified Data.Vector as Vector
 import qualified EVM.Fetch as Fetch
 import qualified EVM.Stepper as Stepper
 
@@ -292,9 +289,6 @@ atFileLine dapp wantedFileName wantedLineNumber vm =
   case currentSrcMap dapp vm of
     Nothing -> False
     Just sm ->
-      case view (dappSources . sourceFiles . at (srcMapFile sm)) dapp of
-        Nothing -> False
-        Just _ ->
           let
             (currentFileName, currentLineNumber) =
               fromJust (srcMapCodePos (view dappSources dapp) sm)
@@ -302,7 +296,7 @@ atFileLine dapp wantedFileName wantedLineNumber vm =
             currentFileName == wantedFileName &&
               currentLineNumber == wantedLineNumber
 
-codeByHash :: W256 -> VM -> Maybe ByteString
+codeByHash :: W256 -> VM -> Maybe Buffer
 codeByHash h vm = do
   let cs = view (env . contracts) vm
   c <- List.find (\c -> h == (view codehash c)) (Map.elems cs)
@@ -311,9 +305,6 @@ codeByHash h vm = do
 allHashes :: VM -> Set W256
 allHashes vm = let cs = view (env . contracts) vm
   in Set.fromList ((view codehash) <$> Map.elems cs)
-
-prettifyCode :: ByteString -> String
-prettifyCode b = List.intercalate "\n" (opString <$> (Vector.toList (EVM.mkCodeOps b)))
 
 outputVm :: Console ()
 outputVm = do
@@ -325,12 +316,11 @@ outputVm = do
         output $
         L [ A "step"
           , L [A ("vm" :: Text), sexp (view uiVm s)]
-          , L [A ("newCodes" :: Text), sexp ((fmap prettifyCode) <$> sendCodes)]
           ]
   fromMaybe noMap $ do
     dapp <- view uiVmDapp s
     sm <- currentSrcMap dapp (view uiVm s)
-    (fileName, _) <- view (dappSources . sourceFiles . at (srcMapFile sm)) dapp
+    let (fileName, _) = view (dappSources . sourceFiles) dapp !! srcMapFile sm
     pure . output $
       L [ A "step"
         , L [A ("vm" :: Text), sexp (view uiVm s)]
@@ -340,7 +330,6 @@ outputVm = do
             , A (txt (srcMapLength sm))
             , A (txt (srcMapJump sm))
             ]
-        , L [A ("newCodes" :: Text), sexp ((fmap prettifyCode) <$> sendCodes)]
         ]
 
 
@@ -418,7 +407,7 @@ instance SDisplay (SExpr Text) where
   sexp = id
 
 instance SDisplay Storage where
-  sexp (Symbolic _) = error "idk"
+  sexp (Symbolic _ _) = error "idk"
   sexp (Concrete d) = sexp d
 
 instance SDisplay VM where
@@ -516,18 +505,22 @@ defaultUnitTestOptions :: MonadIO m => m UnitTestOptions
 defaultUnitTestOptions = do
   params <- liftIO $ getParametersFromEnvironmentVariables Nothing
   pure UnitTestOptions
-    { oracle            = Fetch.zero
-    , verbose           = Nothing
-    , maxIter           = Nothing
-    , smtTimeout        = Nothing
-    , smtState          = Nothing
-    , solver            = Nothing
-    , match             = ""
-    , fuzzRuns          = 100
-    , replay            = Nothing
-    , vmModifier        = id
-    , dapp              = emptyDapp
-    , testParams        = params
+    { oracle      = Fetch.zero
+    , verbose     = Nothing
+    , maxIter     = Nothing
+    , askSmtIters = Nothing
+    , smtTimeout  = Nothing
+    , smtState    = Nothing
+    , solver      = Nothing
+    , match       = ""
+    , covMatch    = Nothing
+    , fuzzRuns    = 100
+    , replay      = Nothing
+    , vmModifier  = id
+    , dapp        = emptyDapp
+    , testParams  = params
+    , maxDepth    = Nothing
+    , ffiAllowed  = False
     }
 
 initialStateForTest
@@ -540,7 +533,7 @@ initialStateForTest opts@(UnitTestOptions {..}) (contractPath, testName) =
     script = do
       Stepper.evm . pushTrace . EntryTrace $
         "test " <> testName <> " (" <> contractPath <> ")"
-      initializeUnitTest opts
+      initializeUnitTest opts testContract
       void (runUnitTest opts testName (AbiTuple mempty))
     ui0 =
       UiVmState

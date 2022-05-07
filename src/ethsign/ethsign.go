@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/accounts/usbwallet"
@@ -9,10 +10,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/rlp"
-
-	"fmt"
 	"io/ioutil"
+	"math/big"
 	"os"
 	"runtime"
 	"strings"
@@ -33,6 +32,7 @@ import (
 // This gives context to the signed message and prevents signing of transactions.
 func signHash(data []byte) []byte {
 	msg := fmt.Sprintf("\x19EvolutionLand Signed Message:\n%d%s", len(data), data)
+	// msg := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(data), data)
 	return crypto.Keccak256([]byte(msg))
 }
 
@@ -41,16 +41,13 @@ func rawSignHash(data []byte) []byte {
 	return crypto.Keccak256([]byte(msg))
 }
 
-func getWallets(c *cli.Context, defaultKeyStores cli.StringSlice) []accounts.Wallet {
+func getWallets(c *cli.Context) []accounts.Wallet {
 	backends := []accounts.Backend{}
 
-	paths := c.StringSlice("key-store")
-
-	for _, x := range paths {
-		ks := keystore.NewKeyStore(
-			x, keystore.StandardScryptN, keystore.StandardScryptP)
-		backends = append(backends, ks)
-	}
+	path := c.String("key-store")
+	ks := keystore.NewKeyStore(
+		path, keystore.StandardScryptN, keystore.StandardScryptP)
+	backends = append(backends, ks)
 
 	if ledgerhub, err := usbwallet.NewLedgerHub(); err != nil {
 		fmt.Fprintf(os.Stderr, "ethsign: failed to look for USB Ledgers")
@@ -73,9 +70,9 @@ func getWallets(c *cli.Context, defaultKeyStores cli.StringSlice) []accounts.Wal
 	return manager.Wallets()
 }
 
-func getWalletData(c *cli.Context, defaultKeyStores cli.StringSlice, from common.Address) (*accounts.Account, string, accounts.Wallet, error) {
+func getWalletData(c *cli.Context, defaultHDPaths cli.StringSlice, from common.Address) (*accounts.Account, string, accounts.Wallet, error) {
 
-	wallets := getWallets(c, defaultKeyStores)
+	wallets := getWallets(c)
 
 	var wallet accounts.Wallet
 	var acct *accounts.Account
@@ -94,9 +91,9 @@ Scan:
 			}
 		} else if x.URL().Scheme == "ledger" {
 			x.Open("")
-			for j := 0; j <= c.Int("n"); j++ {
-				pathstr := fmt.Sprintf(c.String("hd-path")+"/%d", j)
-				path, _ := accounts.ParseDerivationPath(pathstr)
+			// if hd-path is given, check that account first
+			if c.String("hd-path") != "" {
+				path, _ := accounts.ParseDerivationPath(c.String("hd-path"))
 				y, err := x.Derive(path, true)
 				if err != nil {
 					return nil, "", nil, cli.NewExitError("ethsign: Ledger needs to be in Ethereum app with browser support off", 1)
@@ -106,6 +103,24 @@ Scan:
 						acct = &y
 						needPassphrase = false
 						break Scan
+					}
+				}
+			}
+
+			for i := range defaultHDPaths {
+				for j := 0; j <= c.Int("n"); j++ {
+					pathstr := fmt.Sprintf(defaultHDPaths[i], j)
+					path, _ := accounts.ParseDerivationPath(pathstr)
+					y, err := x.Derive(path, true)
+					if err != nil {
+						return nil, "", nil, cli.NewExitError("ethsign: Ledger needs to be in Ethereum app with browser support off", 1)
+					} else {
+						if y.Address == from {
+							wallet = x
+							acct = &y
+							needPassphrase = false
+							break Scan
+						}
 					}
 				}
 			}
@@ -170,47 +185,42 @@ func recover(data []byte, sig hexutil.Bytes, noPrefix bool) (common.Address, err
 }
 
 func main() {
-	var defaultHDPath = "m/44'/60'/0'" // aka "ledger legacy"
-	var defaultKeyStores cli.StringSlice
+	var defaultHDPaths cli.StringSlice
+	defaultHDPaths = []string{
+		"m/44'/60'/%d'/0/0", // aka "ledger live"
+		"m/44'/60'/0'/%d",   // aka "ledger legacy"
+	}
+
+	var defaultKeyStore string
 	if runtime.GOOS == "darwin" {
-		defaultKeyStores = []string{
-			os.Getenv("HOME") + "/Library/Ethereum/keystore",
-			os.Getenv("HOME") + "/Library/Application Support/io.parity.ethereum/keys/ethereum",
-		}
+		defaultKeyStore = os.Getenv("HOME") + "/Library/Ethereum/keystore"
 	} else if runtime.GOOS == "windows" {
-		// XXX: I'm not sure these paths are correct, but they are from geth/parity wikis.
-		defaultKeyStores = []string{
-			os.Getenv("APPDATA") + "/Ethereum/keystore",
-			os.Getenv("APPDATA") + "/Parity/Ethereum/keys",
-		}
+		defaultKeyStore = os.Getenv("APPDATA") + "/Ethereum/keystore"
 	} else {
-		defaultKeyStores = []string{
-			os.Getenv("HOME") + "/.ethereum/keystore",
-			os.Getenv("HOME") + "/.local/share/io.parity.ethereum/keys/ethereum",
-		}
+		defaultKeyStore = os.Getenv("HOME") + "/.ethereum/keystore"
 	}
 
 	app := cli.NewApp()
 	app.Name = "ethsign"
-	app.Usage = "sign Darwinia transactions using a JSON keyfile"
-	app.Version = "0.16"
+	app.Usage = "sign Ethereum transactions using a JSON keyfile"
+	app.Version = "0.16.1"
 	app.Commands = []cli.Command{
 		cli.Command{
 			Name:    "list-accounts",
 			Aliases: []string{"ls"},
 			Usage:   "list accounts in keystore and USB wallets",
 			Flags: []cli.Flag{
-				cli.StringSliceFlag{
+				cli.StringFlag{
 					Name:   "key-store",
 					Usage:  "path to key store",
 					EnvVar: "ETH_KEYSTORE",
-					Value:  &defaultKeyStores,
+					Value:  defaultKeyStore,
 				},
 				cli.StringFlag{
 					Name:   "hd-path",
 					Usage:  "hd derivation path",
 					EnvVar: "ETH_HDPATH",
-					Value:  defaultHDPath,
+					Value:  "",
 				},
 				cli.IntFlag{
 					Name:  "n",
@@ -219,7 +229,7 @@ func main() {
 				},
 			},
 			Action: func(c *cli.Context) error {
-				wallets := getWallets(c, defaultKeyStores)
+				wallets := getWallets(c)
 				for _, x := range wallets {
 					if x.URL().Scheme == "keystore" {
 						for _, y := range x.Accounts() {
@@ -227,14 +237,26 @@ func main() {
 						}
 					} else if x.URL().Scheme == "ledger" {
 						x.Open("")
-						for j := 0; j <= c.Int("n"); j++ {
-							pathstr := fmt.Sprintf(c.String("hd-path")+"/%d", j)
-							path, _ := accounts.ParseDerivationPath(pathstr)
+						// if hd-path is given, check that account first
+						if c.String("hd-path") != "" {
+							path, _ := accounts.ParseDerivationPath(c.String("hd-path"))
 							z, err := x.Derive(path, false)
 							if err != nil {
 								return cli.NewExitError("ethsign: couldn't use Ledger: needs to be in Ethereum app with browser support off", 1)
 							} else {
-								fmt.Printf("%s ledger-%s\n", z.Address.Hex(), pathstr)
+								fmt.Printf("%s ledger-%s\n", z.Address.Hex(), path)
+							}
+						}
+						for i := range defaultHDPaths {
+							for j := 0; j <= c.Int("n"); j++ {
+								pathstr := fmt.Sprintf(defaultHDPaths[i], j)
+								path, _ := accounts.ParseDerivationPath(pathstr)
+								z, err := x.Derive(path, false)
+								if err != nil {
+									return cli.NewExitError("ethsign: couldn't use Ledger: needs to be in Ethereum app with browser support off", 1)
+								} else {
+									fmt.Printf("%s ledger-%s\n", z.Address.Hex(), pathstr)
+								}
 							}
 						}
 					}
@@ -249,17 +271,17 @@ func main() {
 			Aliases: []string{"tx"},
 			Usage:   "make a signed transaction",
 			Flags: []cli.Flag{
-				cli.StringSliceFlag{
+				cli.StringFlag{
 					Name:   "key-store",
 					Usage:  "path to key store",
 					EnvVar: "ETH_KEYSTORE",
-					Value:  &defaultKeyStores,
+					Value:  defaultKeyStore,
 				},
 				cli.StringFlag{
 					Name:   "hd-path",
 					Usage:  "hd derivation path",
 					EnvVar: "ETH_HDPATH",
-					Value:  defaultHDPath,
+					Value:  "",
 				},
 				cli.IntFlag{
 					Name:  "n",
@@ -304,6 +326,10 @@ func main() {
 					Usage: "gas limit",
 				},
 				cli.StringFlag{
+					Name:  "prio-fee",
+					Usage: "max priority fee per gas",
+				},
+				cli.StringFlag{
 					Name:  "value",
 					Usage: "transaction value",
 				},
@@ -323,6 +349,12 @@ func main() {
 					}
 				}
 
+				// TODO: could support tx type 1 at some point
+				txtype := types.LegacyTxType
+				if c.String("prio-fee") != "" {
+					txtype = types.DynamicFeeTxType
+				}
+
 				create := c.Bool("create")
 
 				if (c.String("to") == "" && !create) || (c.String("to") != "" && create) {
@@ -336,26 +368,58 @@ func main() {
 				to := common.HexToAddress(c.String("to"))
 				from := common.HexToAddress(c.String("from"))
 				nonce := math.MustParseUint64(c.String("nonce"))
-				gasPrice := math.MustParseBig256(c.String("gas-price"))
 				gasLimit := math.MustParseUint64(c.String("gas-limit"))
 				value := math.MustParseBig256(c.String("value"))
 				chainID := math.MustParseBig256(c.String("chain-id"))
+				gasPrice := math.MustParseBig256(c.String("gas-price"))
+
+				var (
+					prioFee *big.Int
+				)
+
+				if txtype == types.DynamicFeeTxType {
+					prioFee = math.MustParseBig256(c.String("prio-fee"))
+				}
 
 				dataString := c.String("data")
 				if dataString == "" {
 					dataString = "0x"
 				}
 				data := hexutil.MustDecode(dataString)
-				acct, passphrase, wallet, err := getWalletData(c, defaultKeyStores, from)
+				acct, passphrase, wallet, err := getWalletData(c, defaultHDPaths, from)
 				if err != nil {
 					return err
 				}
 
 				var tx *types.Transaction
 				if create {
-					tx = types.NewContractCreation(nonce, value, gasLimit, gasPrice, data)
+					if txtype == types.LegacyTxType {
+						tx = types.NewContractCreation(nonce, value, gasLimit, gasPrice, data)
+					} else if txtype == types.DynamicFeeTxType {
+						tx = types.NewTx(&types.DynamicFeeTx{
+							Nonce:     nonce,
+							To:        nil,
+							Value:     value,
+							Gas:       gasLimit,
+							GasFeeCap: gasPrice,
+							GasTipCap: prioFee,
+							Data:      data,
+						})
+					}
 				} else {
-					tx = types.NewTransaction(nonce, to, value, gasLimit, gasPrice, data)
+					if txtype == types.LegacyTxType {
+						tx = types.NewTransaction(nonce, to, value, gasLimit, gasPrice, data)
+					} else if txtype == types.DynamicFeeTxType {
+						tx = types.NewTx(&types.DynamicFeeTx{
+							Nonce:     nonce,
+							To:        &to,
+							Value:     value,
+							Gas:       gasLimit,
+							GasFeeCap: gasPrice,
+							GasTipCap: prioFee,
+							Data:      data,
+						})
+					}
 				}
 
 				signed, err := wallet.SignTxWithPassphrase(*acct, passphrase, tx, chainID)
@@ -368,7 +432,7 @@ func main() {
 					v, r, s := signed.RawSignatureValues()
 					fmt.Println(fmt.Sprintf("0x%064x%064x%02x", r, s, v))
 				} else {
-					encoded, _ := rlp.EncodeToBytes(signed)
+					encoded, _ := signed.MarshalBinary()
 					fmt.Println(hexutil.Encode(encoded[:]))
 				}
 				return nil
@@ -380,17 +444,17 @@ func main() {
 			Aliases: []string{"msg"},
 			Usage:   "sign arbitrary data with header prefix",
 			Flags: []cli.Flag{
-				cli.StringSliceFlag{
+				cli.StringFlag{
 					Name:   "key-store",
 					Usage:  "path to key store",
 					EnvVar: "ETH_KEYSTORE",
-					Value:  &defaultKeyStores,
+					Value:  defaultKeyStore,
 				},
 				cli.StringFlag{
 					Name:   "hd-path",
 					Usage:  "hd derivation path",
 					EnvVar: "ETH_HDPATH",
-					Value:  defaultHDPath,
+					Value:  "",
 				},
 				cli.IntFlag{
 					Name:  "n",
@@ -434,7 +498,7 @@ func main() {
 				}
 				data := hexutil.MustDecode(dataString)
 
-				acct, passphrase, wallet, err := getWalletData(c, defaultKeyStores, from)
+				acct, passphrase, wallet, err := getWalletData(c, defaultHDPaths, from)
 				if err != nil {
 					return err
 				}
@@ -443,9 +507,9 @@ func main() {
 				if c.Bool("no-prefix") == true {
 					msg = data
 				} else {
-					msg = []byte(fmt.Sprintf("\x19EvolutionLand Signed Message:\n%d%s", len(data), data))
+					msg = []byte(fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(data), data))
 				}
-				signature, err := wallet.SignDataWithPassphrase(*acct, passphrase, "", msg)
+				signature, err := wallet.SignDataWithPassphrase(*acct, passphrase, accounts.MimetypeTypedData, msg)
 				if err != nil {
 					return cli.NewExitError(err, 1)
 				}
@@ -573,23 +637,15 @@ func main() {
 			Usage: "import hexadecimal private key into keystore",
 			Flags: []cli.Flag{
 				cli.StringFlag{
-					Name:  "keystore",
-					Usage: "path to keystore",
+					Name:   "key-store",
+					Usage:  "path to keystore",
+					EnvVar: "ETH_KEYSTORE",
+					Value:  defaultKeyStore,
 				},
 			},
 			Action: func(c *cli.Context) error {
-				requireds := []string{
-					"keystore",
-				}
-
-				for _, required := range requireds {
-					if c.String(required) == "" {
-						return cli.NewExitError("ethsign: missing required parameter --"+required, 1)
-					}
-				}
-
 				ks := keystore.NewKeyStore(
-					c.String("keystore"),
+					c.String("key-store"),
 					keystore.StandardScryptN, keystore.StandardScryptP)
 
 				fmt.Fprintf(os.Stderr, "Private key as 64 hexadecimal digits (not echoed): ")

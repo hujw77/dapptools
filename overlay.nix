@@ -7,9 +7,24 @@ let
 in rec {
   dapptoolsSrc = self.callPackage (import ./nix/dapptools-src.nix) {};
 
-  haskellPackages = super.haskellPackages.override (old: {
+  haskellPackages =
+    super.haskellPackages.override (old: {
     overrides = lib.composeExtensions (old.overrides or (_: _: {})) (
-      import ./haskell.nix { inherit lib; pkgs = self; }
+      import ./haskell.nix { inherit lib; pkgs = self;}
+    );
+  });
+
+  unwrappedHaskellPackages =
+    super.haskellPackages.override (old: {
+    overrides = lib.composeExtensions (old.overrides or (_: _: {})) (
+      import ./haskell.nix { inherit lib; pkgs = self; wrapped = false;}
+    );
+  });
+
+  sharedHaskellPackages =
+    super.haskellPackages.override (old: {
+    overrides = lib.composeExtensions (old.overrides or (_: _: {})) (
+      import ./haskell.nix { inherit lib; pkgs = self; wrapped = false; shared = true; }
     );
   });
 
@@ -46,10 +61,6 @@ in rec {
       '' else "");
     };
 
-  dapp2 = {
-    test-hevm = import ./nix/dapp/dapp-test-hevm.nix { pkgs = self.pkgs; };
-  };
-
   solc-versions =
     let
       fetchSolcVersions = { owner, attr }:
@@ -60,22 +71,35 @@ in rec {
         import (self.pkgs.fetchFromGitHub {
           inherit owner rev sha256;
           repo = "nixpkgs";
-        }) {};
+        }) { inherit (super) system; };
       in
         self.pkgs.recurseIntoAttrs (
           fetchSolcVersions { owner = "NixOS";   attr = super.system; }
           //
           fetchSolcVersions { owner = "dapphub"; attr = "unreleased_" + super.system; }
         );
-  solc = solc-versions.solc_0_6_7;
 
+  solc = self.pkgs.runCommand "solc" { } "mkdir -p $out/bin; ln -s ${solc-static-versions.solc_0_8_6}/bin/solc-0.8.6 $out/bin/solc";
+
+  solc-static-versions =
+    let
+      make-solc-drv = _: solc:
+        self.callPackage (
+          import ./nix/solc-static.nix {
+            path    = solc.path;
+            version = solc.version;
+            sha256  = solc.sha256;
+        }) {};
+    in builtins.mapAttrs make-solc-drv
+        (builtins.getAttr super.system (import ./nix/solc-static-versions.nix));
+
+  # uses solc, z3 and cvc4 from nix
   hevm = self.pkgs.haskell.lib.justStaticExecutables self.haskellPackages.hevm;
 
+  # uses solc, z3 and cvc4 from PATH
+  hevmUnwrapped = self.pkgs.haskell.lib.justStaticExecutables self.unwrappedHaskellPackages.hevm;
+
   libff = self.callPackage (import ./nix/libff.nix) {};
-
-  cvc4 = self.callPackage (import ./nix/cvc4.nix) {};
-
-  z3 = self.callPackage (import ./nix/z3.nix) {};
 
   jays = (
     self.pkgs.haskell.lib.justStaticExecutables
@@ -94,7 +118,7 @@ in rec {
 
   # We use this to run private testnets without
   # the pesky transaction size limit.
-  go-ethereum-unlimited = super.go-ethereum.overrideAttrs (geth: rec {
+  go-ethereum-unlimited = (self.callPackage (import ./nix/geth.nix) {}).overrideAttrs (geth: rec {
     name = "${geth.pname}-unlimited-${geth.version}";
     preConfigure = ''
       # Huge transaction calldata
@@ -107,7 +131,7 @@ in rec {
 
       # Huge block gas limit in --dev mode
       substituteInPlace core/genesis.go --replace \
-        'GasLimit:   6283185,' \
+        'GasLimit:   11500000,' \
         'GasLimit:   0xffffffffffffffff,'
     '';
   });

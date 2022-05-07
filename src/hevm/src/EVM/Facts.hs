@@ -36,10 +36,9 @@ module EVM.Facts
   ) where
 
 import EVM          (VM, Contract, Cache)
-import EVM.Concrete (Word)
-import EVM.Symbolic (litWord, SymWord, forceLit)
+import EVM.Symbolic (litWord, forceLit)
 import EVM          (balance, nonce, storage, bytecode, env, contracts, contract, state, cache, fetched)
-import EVM.Types    (Addr)
+import EVM.Types    (Addr, Word, SymWord, Buffer(..))
 
 import qualified EVM
 
@@ -109,19 +108,28 @@ instance AsASCII ByteString where
   dump x = BS16.encode x <> "\n"
   load x =
     case BS16.decode . mconcat . BS.split 10 $ x of
-      (y, "") -> Just y
+      Right y -> Just y
       _       -> Nothing
 
 contractFacts :: Addr -> Contract -> [Fact]
-contractFacts a x = storageFacts a x ++
-  [ BalanceFact a (view balance x)
-  , NonceFact   a (view nonce x)
-  , CodeFact    a (view bytecode x)
-  ]
+contractFacts a x = case view bytecode x of
+  ConcreteBuffer b ->
+    storageFacts a x ++
+    [ BalanceFact a (view balance x)
+    , NonceFact   a (view nonce x)
+    , CodeFact    a b
+    ]
+  SymbolicBuffer b ->
+    -- here simply ignore storing the bytecode
+    storageFacts a x ++
+    [ BalanceFact a (view balance x)
+    , NonceFact   a (view nonce x)
+    ]
+
 
 storageFacts :: Addr -> Contract -> [Fact]
 storageFacts a x = case view storage x of
-  EVM.Symbolic _ -> []
+  EVM.Symbolic _ _ -> []
   EVM.Concrete s -> map f (Map.toList s)
   where
     f :: (Word, SymWord) -> Fact
@@ -152,7 +160,7 @@ apply1 :: VM -> Fact -> VM
 apply1 vm fact =
   case fact of
     CodeFact    {..} -> flip execState vm $ do
-      assign (env . contracts . at addr) (Just (EVM.initialContract (EVM.RuntimeCode blob)))
+      assign (env . contracts . at addr) (Just (EVM.initialContract (EVM.RuntimeCode (ConcreteBuffer blob))))
       when (view (state . contract) vm == addr) $ EVM.loadContract addr
     StorageFact {..} ->
       vm & over (env . contracts . ix addr . storage) (EVM.writeStorage (litWord which) (litWord what))
@@ -165,7 +173,7 @@ apply2 :: VM -> Fact -> VM
 apply2 vm fact =
   case fact of
     CodeFact    {..} -> flip execState vm $ do
-      assign (cache . fetched . at addr) (Just (EVM.initialContract (EVM.RuntimeCode blob)))
+      assign (cache . fetched . at addr) (Just (EVM.initialContract (EVM.RuntimeCode (ConcreteBuffer blob))))
       when (view (state . contract) vm == addr) $ EVM.loadContract addr
     StorageFact {..} ->
       vm & over (cache . fetched . ix addr . storage) (EVM.writeStorage (litWord which) (litWord what))

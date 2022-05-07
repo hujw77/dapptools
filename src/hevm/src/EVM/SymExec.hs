@@ -4,7 +4,6 @@
 
 module EVM.SymExec where
 
-
 import Prelude hiding (Word)
 
 import Control.Lens hiding (pre)
@@ -17,10 +16,8 @@ import EVM.Stepper (Stepper)
 import qualified EVM.Stepper as Stepper
 import qualified Control.Monad.Operational as Operational
 import Control.Monad.State.Strict hiding (state)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import EVM.Types
-import EVM.Concrete (Whiff(..))
-import EVM.Symbolic (SymWord(..), sw256)
 import EVM.Concrete (createAddress)
 import qualified EVM.FeeSchedule as FeeSchedule
 import Data.SBV.Trans.Control
@@ -28,14 +25,18 @@ import Data.SBV.Trans hiding (distinct, Word)
 import Data.SBV hiding (runSMT, newArray_, addAxiom, distinct, sWord8s, Word)
 import Data.Vector (toList, fromList)
 import Data.Tree
+import Data.DoubleWord (Word256)
 
 import Data.ByteString (ByteString, pack)
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString as BS
 import Data.Text (Text, splitOn, unpack)
-import Control.Monad.State.Strict (runState, get, put, zipWithM)
 import qualified Control.Monad.State.Class as State
 import Control.Applicative
+
+data ProofResult a b c = Qed a | Cex b | Timeout c
+type VerifyResult = ProofResult (Tree BranchInfo) (Tree BranchInfo) (Tree BranchInfo)
+type EquivalenceResult = ProofResult ([VM], [VM]) VM ()
 
 -- | Convenience functions for generating large symbolic byte strings
 sbytes32, sbytes128, sbytes256, sbytes512, sbytes1024 :: Query ([SWord 8])
@@ -45,26 +46,34 @@ sbytes256 = liftA2 (++) sbytes128 sbytes128
 sbytes512 = liftA2 (++) sbytes256 sbytes256
 sbytes1024 = liftA2 (++) sbytes512 sbytes512
 
+mkByte :: Query [SWord 8]
+mkByte = do x <- freshVar_
+            return [x]
+
 -- | Abstract calldata argument generation
--- We don't assume input types are restricted to their proper range here;
--- such assumptions should instead be given as preconditions.
--- This could catch some interesting calldata mismanagement errors.
-symAbiArg :: AbiType -> Query ([SWord 8], SWord 32)
-symAbiArg (AbiUIntType n) | n `mod` 8 == 0 && n <= 256 = do x <- sbytes32
-                                                            return (x, 32)
+symAbiArg :: AbiType -> Query ([SWord 8], W256)
+symAbiArg (AbiUIntType n) | n `mod` 8 == 0 && n <= 256 =
+  do x <- concatMapM (const mkByte) [0..(n `div` 8) - 1]
+     return (padLeft' 32 x, 32)
                           | otherwise = error "bad type"
 
-symAbiArg (AbiIntType n)  | n `mod` 8 == 0 && n <= 256 = do x <- sbytes32
-                                                            return (x, 32)
+symAbiArg (AbiIntType n)  | n `mod` 8 == 0 && n <= 256 =
+  do x <- concatMapM (const mkByte) [(0 :: Int) ..(n `div` 8) - 1]
+     return (padLeft' 32 x, 32)
+
                           | otherwise = error "bad type"
-symAbiArg AbiBoolType = do x <- sbytes32
-                           return (x, 32)
+symAbiArg AbiBoolType =
+  do x <- mkByte
+     return (padLeft' 32 x, 32)
 
-symAbiArg AbiAddressType = do x <- sbytes32
-                              return (x, 32)
+symAbiArg AbiAddressType =
+  do x <- concatMapM (const mkByte) [(0 :: Int)..19]
+     return (padLeft' 32 x, 32)
 
-symAbiArg (AbiBytesType n) | n <= 32 = do x <- sbytes32
-                                          return (x, 32)
+symAbiArg (AbiBytesType n) | n <= 32 =
+  do x <- concatMapM (const mkByte) [0..n - 1]
+     return (padLeft' 32 x, 32)
+
                            | otherwise = error "bad type"
 
 -- TODO: is this encoding correct?
@@ -85,7 +94,7 @@ symAbiArg n =
 -- with concrete arguments.
 -- Any argument given as "<symbolic>" or omitted at the tail of the list are
 -- kept symbolic.
-symCalldata :: Text -> [AbiType] -> [String] -> Query ([SWord 8], SWord 32)
+symCalldata :: Text -> [AbiType] -> [String] -> Query ([SWord 8], W256)
 symCalldata sig typesignature concreteArgs =
   let args = concreteArgs <> replicate (length typesignature - length concreteArgs)  "<symbolic>"
       mkArg typ "<symbolic>" = symAbiArg typ
@@ -101,20 +110,20 @@ abstractVM typesignature concreteArgs x storagemodel = do
     case typesignature of
       Nothing -> do cd <- sbytes256
                     len <- freshVar_
-                    return (cd, len, (len .<= 256, Val "calldatalength < 256"))
+                    return (cd, var "calldataLength" len, (len .<= 256, Todo "calldatalength < 256" []))
       Just (name, typs) -> do (cd, cdlen) <- symCalldata name typs concreteArgs
-                              return (cd, cdlen, (sTrue, Val "True"))
+                              return (cd, S (Literal cdlen) (literal $ num cdlen), (sTrue, Todo "Trivial" []))
   symstore <- case storagemodel of
-    SymbolicS -> Symbolic <$> freshArray_ Nothing
-    InitialS -> Symbolic <$> freshArray_ (Just 0)
+    SymbolicS -> Symbolic [] <$> freshArray_ Nothing
+    InitialS -> Symbolic [] <$> freshArray_ (Just 0)
     ConcreteS -> return $ Concrete mempty
   c <- SAddr <$> freshVar_
-  value' <- sw256 <$> freshVar_
-  return $ loadSymVM (RuntimeCode x) symstore storagemodel c value' (SymbolicBuffer cd', cdlen) & over constraints ((<>) [cdconstraint])
+  value' <- var "CALLVALUE" <$> freshVar_
+  return $ loadSymVM (RuntimeCode (ConcreteBuffer x)) symstore storagemodel c value' (SymbolicBuffer cd', cdlen) & over constraints ((<>) [cdconstraint])
 
-loadSymVM :: ContractCode -> Storage -> StorageModel -> SAddr -> SymWord -> (Buffer, SWord 32) -> VM
+loadSymVM :: ContractCode -> Storage -> StorageModel -> SAddr -> SymWord -> (Buffer, SymWord) -> VM
 loadSymVM x initStore model addr callvalue' calldata' =
-    (makeVm $ VMOpts
+  (makeVm $ VMOpts
     { vmoptContract = contractWithStore x initStore
     , vmoptCalldata = calldata'
     , vmoptValue = callvalue'
@@ -129,11 +138,15 @@ loadSymVM x initStore model addr callvalue' calldata' =
     , vmoptDifficulty = 0
     , vmoptGas = 0xffffffffffffffff
     , vmoptGaslimit = 0xffffffffffffffff
+    , vmoptBaseFee = 0
+    , vmoptPriorityFee = 0
     , vmoptMaxCodeSize = 0xffffffff
-    , vmoptSchedule = FeeSchedule.istanbul
+    , vmoptSchedule = FeeSchedule.berlin
     , vmoptChainId = 1
     , vmoptCreate = False
     , vmoptStorageModel = model
+    , vmoptTxAccessList = mempty
+    , vmoptAllowFFI = False
     }) & set (env . contracts . at (createAddress ethrunAddress 1))
              (Just (contractWithStore x initStore))
 
@@ -142,46 +155,57 @@ data BranchInfo = BranchInfo
     _branchCondition    :: Maybe Whiff
   }
 
-interpret' :: Fetch.Fetcher -> Maybe Integer -> VM -> Query (Tree BranchInfo)
-interpret' fetcher maxIter vm = let
-  cont s = interpret' fetcher maxIter $ execState s vm
+doInterpret :: Fetch.Fetcher -> Maybe Integer -> Maybe Integer -> VM -> Query (Tree BranchInfo)
+doInterpret fetcher maxIter askSmtIters vm = let
+      f (vm', cs) = Node (BranchInfo (if null cs then vm' else vm) Nothing) cs
+    in f <$> interpret' fetcher maxIter askSmtIters vm
+
+interpret' :: Fetch.Fetcher -> Maybe Integer -> Maybe Integer -> VM -> Query (VM, [Tree BranchInfo])
+interpret' fetcher maxIter askSmtIters vm = let
+  cont s = interpret' fetcher maxIter askSmtIters $ execState s vm
   in case view EVM.result vm of
 
     Nothing -> cont exec1
 
     Just (VMFailure (EVM.Query q@(PleaseAskSMT _ _ continue))) -> let
       codelocation = getCodeLocation vm
-      location = view (iterations . at codelocation) vm
-      in case location of
-        Nothing -> cont $ continue EVM.Unknown
-        Just _ -> io (fetcher q) >>= cont
+      iteration = num $ fromMaybe 0 $ view (iterations . at codelocation) vm
+      -- as an optimization, we skip consulting smt
+      -- if we've been at the location less than 5 times
+      in if iteration < (fromMaybe 5 askSmtIters)
+         then cont $ continue EVM.Unknown
+         else io (fetcher q) >>= cont
 
     Just (VMFailure (EVM.Query q)) -> io (fetcher q) >>= cont
 
     Just (VMFailure (Choose (EVM.PleaseChoosePath whiff continue)))
       -> case maxIterationsReached vm maxIter of
-        Nothing -> do
+        Nothing -> let
+          lvm = execState (continue True) vm
+          rvm = execState (continue False) vm
+          in do
             push 1
-            left <- cont $ continue True
+            (leftvm, left) <- interpret' fetcher maxIter askSmtIters lvm
             pop 1
             push 1
-            right <- cont $ continue False
+            (rightvm, right) <- interpret' fetcher maxIter askSmtIters rvm
             pop 1
-            return $ Node (BranchInfo vm (Just whiff)) [left, right]
+            return (vm, [Node (BranchInfo leftvm (Just whiff)) left, Node (BranchInfo rightvm (Just whiff)) right])
         Just n -> cont $ continue (not n)
 
     Just _
-      -> return $ Node (BranchInfo vm Nothing) []
+      -> return (vm, [])
 
 -- | Interpreter which explores all paths at
 -- | branching points.
 -- | returns a list of possible final evm states
 interpret
   :: Fetch.Fetcher
-  -> Maybe Integer --max iterations
+  -> Maybe Integer -- max iterations
+  -> Maybe Integer -- ask smt iterations
   -> Stepper a
   -> StateT VM Query [a]
-interpret fetcher maxIter =
+interpret fetcher maxIter askSmtIters =
   eval . Operational.view
 
   where
@@ -195,41 +219,47 @@ interpret fetcher maxIter =
     eval (action Operational.:>>= k) =
       case action of
         Stepper.Exec ->
-          exec >>= interpret fetcher maxIter . k
+          exec >>= interpret fetcher maxIter askSmtIters . k
         Stepper.Run ->
-          run >>= interpret fetcher maxIter . k
+          run >>= interpret fetcher maxIter askSmtIters . k
+        Stepper.IOAct q ->
+          mapStateT io q >>= interpret fetcher maxIter askSmtIters . k
         Stepper.Ask (EVM.PleaseChoosePath _ continue) -> do
           vm <- get
           case maxIterationsReached vm maxIter of
-            Nothing -> do push 1
-                          a <- interpret fetcher maxIter (Stepper.evm (continue True) >>= k)
-                          put vm
-                          pop 1
-                          push 1
-                          b <- interpret fetcher maxIter (Stepper.evm (continue False) >>= k)
-                          pop 1
-                          return $ a <> b
-            Just n -> interpret fetcher maxIter (Stepper.evm (continue (not n)) >>= k)
+            Nothing -> do
+              push 1
+              a <- interpret fetcher maxIter askSmtIters (Stepper.evm (continue True) >>= k)
+              put vm
+              pop 1
+              push 1
+              b <- interpret fetcher maxIter askSmtIters (Stepper.evm (continue False) >>= k)
+              pop 1
+              return $ a <> b
+            Just n ->
+              interpret fetcher maxIter askSmtIters (Stepper.evm (continue (not n)) >>= k)
         Stepper.Wait q -> do
-          let performQuery =
-                do m <- liftIO (fetcher q)
-                   interpret fetcher maxIter (Stepper.evm m >>= k)
+          let performQuery = do
+                m <- liftIO (fetcher q)
+                interpret fetcher maxIter askSmtIters (Stepper.evm m >>= k)
 
           case q of
             PleaseAskSMT _ _ continue -> do
               codelocation <- getCodeLocation <$> get
-              iters <- use (iterations . at codelocation)
-              case iters of
-                -- if this is the first time we are branching at this point,
-                -- explore both branches without consulting SMT.
-                -- Exploring too many branches is a lot cheaper than
-                -- consulting our SMT solver.
-                Nothing -> interpret fetcher maxIter (Stepper.evm (continue EVM.Unknown) >>= k)
-                _ -> performQuery
+              iteration <- num . fromMaybe 0 <$> use (iterations . at codelocation)
+
+              -- if this is the first time we are branching at this point,
+              -- explore both branches without consulting SMT.
+              -- Exploring too many branches is a lot cheaper than
+              -- consulting our SMT solver.
+              if iteration < (fromMaybe 5 askSmtIters)
+              then interpret fetcher maxIter askSmtIters (Stepper.evm (continue EVM.Unknown) >>= k)
+              else performQuery
+
             _ -> performQuery
 
         Stepper.EVM m ->
-          State.state (runState m) >>= interpret fetcher maxIter . k
+          State.state (runState m) >>= interpret fetcher maxIter askSmtIters . k
 
 maxIterationsReached :: VM -> Maybe Integer -> Maybe Bool
 maxIterationsReached _ Nothing = Nothing
@@ -243,20 +273,51 @@ maxIterationsReached vm (Just maxIter) =
 type Precondition = VM -> SBool
 type Postcondition = (VM, VM) -> SBool
 
-checkAssert :: ByteString -> Maybe (Text, [AbiType]) -> [String] -> Query (Either (Tree BranchInfo) (Tree BranchInfo), VM)
-checkAssert c signature' concreteArgs = verifyContract c signature' concreteArgs SymbolicS (const sTrue) (Just checkAssertions)
+checkAssert :: [Word256] -> ByteString -> Maybe (Text, [AbiType]) -> [String] -> Query (VerifyResult, VM)
+checkAssert errs c signature' concreteArgs = verifyContract c signature' concreteArgs SymbolicS (const sTrue) (Just $ checkAssertions errs)
 
-checkAssertions :: Postcondition
-checkAssertions (_, out) = case view result out of
+{- |Checks if an assertion violation has been encountered
+
+  hevm recognises the following as an assertion violation:
+
+  1. the invalid opcode (0xfe) (solc < 0.8)
+  2. a revert with a reason of the form `abi.encodeWithSelector("Panic(uint256)", code)`, where code is one of the following (solc >= 0.8):
+    - 0x00: Used for generic compiler inserted panics.
+    - 0x01: If you call assert with an argument that evaluates to false.
+    - 0x11: If an arithmetic operation results in underflow or overflow outside of an unchecked { ... } block.
+    - 0x12; If you divide or modulo by zero (e.g. 5 / 0 or 23 % 0).
+    - 0x21: If you convert a value that is too big or negative into an enum type.
+    - 0x22: If you access a storage byte array that is incorrectly encoded.
+    - 0x31: If you call .pop() on an empty array.
+    - 0x32: If you access an array, bytesN or an array slice at an out-of-bounds or negative index (i.e. x[i] where i >= x.length or i < 0).
+    - 0x41: If you allocate too much memory or create an array that is too large.
+    - 0x51: If you call a zero-initialized variable of internal function type.
+
+  see: https://docs.soliditylang.org/en/v0.8.6/control-structures.html?highlight=Panic#panic-via-assert-and-error-via-require
+-}
+checkAssertions :: [Word256] -> Postcondition
+checkAssertions errs (_, out) = case view result out of
   Just (EVM.VMFailure (EVM.UnrecognizedOpcode 254)) -> sFalse
+  Just (EVM.VMFailure (EVM.Revert msg)) -> if msg `elem` (fmap panicMsg errs) then sFalse else sTrue
   _ -> sTrue
 
-verifyContract :: ByteString -> Maybe (Text, [AbiType]) -> [String] -> StorageModel -> Precondition -> Maybe Postcondition -> Query (Either (Tree BranchInfo) (Tree BranchInfo), VM)
+-- |By default hevm checks for all assertions except those which result from arithmetic overflow
+defaultPanicCodes :: [Word256]
+defaultPanicCodes = [ 0x00, 0x01, 0x12, 0x21, 0x22, 0x31, 0x32, 0x41, 0x51 ]
+
+allPanicCodes :: [Word256]
+allPanicCodes = [ 0x00, 0x01, 0x11, 0x12, 0x21, 0x22, 0x31, 0x32, 0x41, 0x51 ]
+
+-- |Produces the revert message for solc >=0.8 assertion violations
+panicMsg :: Word256 -> ByteString
+panicMsg err = (selector "Panic(uint256)") <> (encodeAbiValue $ AbiUInt 256 err)
+
+verifyContract :: ByteString -> Maybe (Text, [AbiType]) -> [String] -> StorageModel -> Precondition -> Maybe Postcondition -> Query (VerifyResult, VM)
 verifyContract theCode signature' concreteArgs storagemodel pre maybepost = do
     preStateRaw <- abstractVM signature' concreteArgs theCode  storagemodel
     -- add the pre condition to the pathconditions to ensure that we are only exploring valid paths
-    let preState = over constraints ((++) [(pre preStateRaw, Dull)]) preStateRaw
-    v <- verify preState Nothing Nothing maybepost
+    let preState = over constraints ((++) [(pre preStateRaw, Todo "assumptions" [])]) preStateRaw
+    v <- verify preState Nothing Nothing Nothing maybepost
     return (v, preState)
 
 pruneDeadPaths :: [VM] -> [VM]
@@ -273,6 +334,7 @@ consistentPath vm = do
     Sat -> return $ Just vm
     Unk -> return $ Just vm -- the path may still be consistent
     Unsat -> return Nothing
+    DSat _ -> error "unexpected DSAT"
 
 consistentTree :: Tree BranchInfo -> Query (Maybe (Tree BranchInfo))
 consistentTree (Node (BranchInfo vm w) []) = do
@@ -285,44 +347,52 @@ consistentTree (Node b xs) = do
     return Nothing
   else
     return $ Just (Node b consistentChildren)
-    
-  
+
+
 leaves :: Tree BranchInfo -> [VM]
 leaves (Node x []) = [_vm x]
 leaves (Node _ xs) = concatMap leaves xs
 
 -- | Symbolically execute the VM and check all endstates against the postcondition, if available.
--- Returns `Right (Tree BranchInfo)` if the postcondition can be violated, or
--- or `Left (Tree BranchInfo)`, if the postcondition holds for all endstates.
-verify :: VM -> Maybe Integer -> Maybe (Fetch.BlockNumber, Text) -> Maybe Postcondition -> Query (Either (Tree BranchInfo) (Tree BranchInfo))
-verify preState maxIter rpcinfo maybepost = do
-  let model = view (env . storageModel) preState
+verify :: VM -> Maybe Integer -> Maybe Integer -> Maybe (Fetch.BlockNumber, Text) -> Maybe Postcondition -> Query VerifyResult
+verify preState maxIter askSmtIters rpcinfo maybepost = do
   smtState <- queryState
-  tree <- interpret' (Fetch.oracle (Just smtState) rpcinfo False) maxIter preState
+  tree <- doInterpret (Fetch.oracle (Just smtState) rpcinfo False) maxIter askSmtIters preState
   case maybepost of
     (Just post) -> do
       let livePaths = pruneDeadPaths $ leaves tree
-      -- can also do these queries individually (even concurrently!). Could save time and report multiple violations
+          -- have we hit max iterations at any point in a given path
+          maxReached :: VM -> Bool
+          maxReached p = case maxIter of
+            Just maxI -> any (>= (fromInteger maxI)) (view iterations p)
+            Nothing -> False
+          -- is there any path which can possibly violate the postcondition?
+          -- can also do these queries individually (even concurrently!). Could save time and report multiple violations
           postC = sOr $ fmap (\postState -> (sAnd (fst <$> view constraints postState)) .&& sNot (post (preState, postState))) livePaths
-      -- is there any path which can possibly violate
-      -- the postcondition?
       resetAssertions
       constrain postC
       io $ putStrLn "checking postcondition..."
       checkSat >>= \case
         Unk -> do io $ putStrLn "postcondition query timed out"
-                  return $ Left tree
-        Unsat -> do io $ putStrLn "Q.E.D."
-                    return $ Left tree
-        Sat -> return $ Right tree
+                  return $ Timeout tree
+        Unsat -> do
+          if any maxReached livePaths
+            then io $ putStrLn "WARNING: max iterations reached, execution halted prematurely"
+            else io $ putStrLn "Q.E.D."
+          return $ Qed tree
+        Sat -> return $ Cex tree
+        DSat _ -> error "unexpected DSAT"
 
     Nothing -> do io $ putStrLn "Nothing to check"
-                  return $ Left tree
+                  return $ Qed tree
 
 -- | Compares two contract runtimes for trace equivalence by running two VMs and comparing the end states.
-equivalenceCheck :: ByteString -> ByteString -> Maybe Integer -> Maybe (Text, [AbiType]) -> Query (Either ([VM], [VM]) VM)
-equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
-  preStateA <- abstractVM signature' [] bytecodeA SymbolicS
+equivalenceCheck :: ByteString -> ByteString -> Maybe Integer -> Maybe Integer -> Maybe (Text, [AbiType]) -> Query EquivalenceResult
+equivalenceCheck bytecodeA bytecodeB maxiter askSmtIters signature' = do
+  let
+    bytecodeA' = if BS.null bytecodeA then BS.pack [0] else bytecodeA
+    bytecodeB' = if BS.null bytecodeB then BS.pack [0] else bytecodeB
+  preStateA <- abstractVM signature' [] bytecodeA' SymbolicS
 
   let preself = preStateA ^. state . contract
       precaller = preStateA ^. state . caller
@@ -330,14 +400,14 @@ equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
       prestorage = preStateA ^?! env . contracts . ix preself . storage
       (calldata', cdlen) = view (state . calldata) preStateA
       pathconds = view constraints preStateA
-      preStateB = loadSymVM (RuntimeCode bytecodeB) prestorage SymbolicS precaller callvalue' (calldata', cdlen) & set constraints pathconds
+      preStateB = loadSymVM (RuntimeCode (ConcreteBuffer bytecodeB')) prestorage SymbolicS precaller callvalue' (calldata', cdlen) & set constraints pathconds
 
   smtState <- queryState
   push 1
-  aVMs <- interpret' (Fetch.oracle (Just smtState) Nothing False) maxiter preStateA
+  aVMs <- doInterpret (Fetch.oracle (Just smtState) Nothing False) maxiter askSmtIters preStateA
   pop 1
   push 1
-  bVMs <- interpret' (Fetch.oracle (Just smtState) Nothing False) maxiter preStateB
+  bVMs <- doInterpret (Fetch.oracle (Just smtState) Nothing False) maxiter askSmtIters preStateB
   pop 1
   -- Check each pair of endstates for equality:
   let differingEndStates = uncurry distinct <$> [(a,b) | a <- pruneDeadPaths (leaves aVMs), b <- pruneDeadPaths (leaves bVMs)]
@@ -346,7 +416,7 @@ equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
             (aSelf, bSelf) = both' (view (state . contract)) (a, b)
             (aEnv, bEnv) = both' (view (env . contracts)) (a, b)
             (aResult, bResult) = both' (view result) (a, b)
-            (Symbolic aStorage, Symbolic bStorage) = (view storage (aEnv ^?! ix aSelf), view storage (bEnv ^?! ix bSelf))
+            (Symbolic _ aStorage, Symbolic _ bStorage) = (view storage (aEnv ^?! ix aSelf), view storage (bEnv ^?! ix bSelf))
             differingResults = case (aResult, bResult) of
 
               (Just (VMSuccess aOut), Just (VMSuccess bOut)) ->
@@ -362,7 +432,7 @@ equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
 
               (Just _, Just _) -> sTrue
 
-              _ -> error "Internal error during symbolic execution (should not be possible)"
+              errormsg -> error $ show errormsg
 
         in sAnd (fst <$> aPath) .&& sAnd (fst <$> bPath) .&& differingResults
   -- If there exists a pair of endstates where this is not the case,
@@ -370,23 +440,24 @@ equivalenceCheck bytecodeA bytecodeB maxiter signature' = do
   constrain $ sOr differingEndStates
 
   checkSat >>= \case
-     Unk -> error "solver said unknown!"
-     Sat -> return $ Right preStateA
-     Unsat -> return $ Left (leaves aVMs, leaves bVMs)
+     Unk -> return $ Timeout ()
+     Sat -> return $ Cex preStateA
+     Unsat -> return $ Qed (leaves aVMs, leaves bVMs)
+     DSat _ -> error "unexpected DSAT"
 
 both' :: (a -> b) -> (a, a) -> (b, b)
 both' f (x, y) = (f x, f y)
 
 showCounterexample :: VM -> Maybe (Text, [AbiType]) -> Query ()
 showCounterexample vm maybesig = do
-  let (calldata', cdlen) = view (EVM.state . EVM.calldata) vm
+  let (calldata', S _ cdlen) = view (EVM.state . EVM.calldata) vm
       S _ cvalue = view (EVM.state . EVM.callvalue) vm
       SAddr caller' = view (EVM.state . EVM.caller) vm
   cdlen' <- num <$> getValue cdlen
   calldatainput <- case calldata' of
     SymbolicBuffer cd -> mapM (getValue.fromSized) (take cdlen' cd) >>= return . pack
     ConcreteBuffer cd -> return $ BS.take cdlen' cd
-  callvalue' <- num <$> getValue cvalue
+  callvalue' <- getValue cvalue
   caller'' <- num <$> getValue caller'
   io $ do
     putStrLn "Calldata:"

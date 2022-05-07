@@ -9,7 +9,6 @@ import EVM.Types
 import EVM.Dapp
 import EVM.Solidity
 import EVM.UnitTest
-import EVM.Concrete
 import EVM.Symbolic
 
 import EVM hiding (path)
@@ -25,6 +24,7 @@ import Data.SBV hiding (Word)
 import qualified Data.Aeson           as JSON
 import Options.Generic
 import Data.SBV.Trans.Control
+import Data.Maybe (fromMaybe)
 import Control.Monad.State.Strict (execStateT)
 
 import qualified Data.Map as Map
@@ -32,13 +32,10 @@ import qualified Data.ByteString.Lazy   as LazyByteString
 import qualified Data.ByteString      as BS
 import qualified Data.ByteString.Lazy.Char8 as B
 import qualified Control.Monad.State.Class as State
-import Control.Monad.State.Strict (runState, liftIO, liftM, StateT, get)
+import Control.Monad.State.Strict (runState, liftIO, StateT, get)
 import Control.Lens hiding (op, passing)
 import Control.Monad.Operational (ProgramViewT(..), ProgramView)
 import qualified Control.Monad.Operational as Operational
-
-concatMapM :: Monad m => (a -> m [b]) -> [a] -> m [b]
-concatMapM f xs   =  liftM concat (mapM f xs)
 
 loadDappInfo :: String -> String -> IO DappInfo
 loadDappInfo path file =
@@ -61,20 +58,25 @@ ghciTest root path statePath =
           facts <- Git.loadFacts (Git.RepoAt repoPath)
           pure (flip Facts.apply facts)
     params <- getParametersFromEnvironmentVariables Nothing
+    dapp <- loadDappInfo root path
     let
       opts = UnitTestOptions
         { oracle = EVM.Fetch.zero
         , verbose = Nothing
         , maxIter = Nothing
+        , askSmtIters = Nothing
         , smtTimeout = Nothing
         , smtState = Nothing
         , solver = Nothing
         , match = ""
+        , covMatch = Nothing
         , fuzzRuns = 100
         , replay = Nothing
         , vmModifier = loadFacts
-        , dapp = emptyDapp
+        , dapp = dapp
         , testParams = params
+        , maxDepth = Nothing
+        , ffiAllowed = False
         }
     readSolc path >>=
       \case
@@ -123,15 +125,19 @@ ghciTty root path statePath =
         { oracle = EVM.Fetch.zero
         , verbose = Nothing
         , maxIter = Nothing
+        , askSmtIters = Nothing
         , smtTimeout = Nothing
         , smtState = Nothing
         , solver = Nothing
         , match = ""
+        , covMatch = Nothing
         , fuzzRuns = 100
         , replay = Nothing
         , vmModifier = loadFacts
         , dapp = emptyDapp
         , testParams = params
+        , maxDepth = Nothing
+        , ffiAllowed = False
         }
     EVM.TTY.main testOpts root path
 
@@ -160,10 +166,15 @@ data VMTraceResult =
 
 getOp :: VM -> Word8
 getOp vm =
-  if BS.length (view (state . code) vm) <= view (state . EVM.pc) vm
-  then 0
-  else fromIntegral $ BS.index (view (state . code) vm) (view (state . EVM.pc) vm)
-
+  let i  = vm ^. state . EVM.pc
+      code' = vm ^. state . code
+      xs = case code' of
+        ConcreteBuffer xs' -> ConcreteBuffer (BS.drop i xs')
+        SymbolicBuffer xs' -> SymbolicBuffer (drop i xs')
+  in if len xs == 0 then 0
+  else case xs of
+       ConcreteBuffer b -> BS.index b 0
+       SymbolicBuffer b -> fromSized $ fromMaybe (error "unexpected symbolic code") (unliteral (b !! 0))
 
 vmtrace :: VM -> VMTrace
 vmtrace vm =
@@ -245,6 +256,8 @@ interpretWithTrace fetcher =
              State.state (runState m) >> interpretWithTrace fetcher (k ())
         EVM.Stepper.Ask _ ->
           error "cannot make choices with this interpretWithTraceer"
+        EVM.Stepper.IOAct m ->
+          m >>= interpretWithTrace fetcher . k
         EVM.Stepper.EVM m -> do
           r <- State.state (runState m)
           interpretWithTrace fetcher (k r)

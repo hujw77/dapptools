@@ -1,10 +1,10 @@
 { lib, stdenv, fetchFromGitHub, makeWrapper, glibcLocales, solc, nix
-, bc, coreutils, curl, ethsign, git, gnused, jq, jshon, nodejs, perl
+, bc, coreutils, curl, ethsign, git, gnused, jq, jshon, nodejs, tre, perl
 , gnugrep, hevm, shellcheck, dapptoolsSrc }:
 
 stdenv.mkDerivation rec {
   name = "seth-${version}";
-  version = "0.9.2";
+  version = "0.12.0";
   src = ./.;
 
   nativeBuildInputs = [ nodejs makeWrapper shellcheck ];
@@ -16,7 +16,7 @@ stdenv.mkDerivation rec {
   postInstall =
     let
       path = lib.makeBinPath [
-        bc coreutils curl ethsign git gnused nix jq hevm jshon nodejs perl solc
+        bc coreutils curl ethsign git gnused nix jq hevm jshon nodejs tre perl solc
         gnugrep
       ];
     in
@@ -39,7 +39,7 @@ stdenv.mkDerivation rec {
   meta = {
     description = "Command-line client for talking to Ethereum nodes";
     homepage = https://github.com/dapphub/dapptools/src/seth/;
-    maintainers = [stdenv.lib.maintainers.dbrock];
+    maintainers = [lib.maintainers.dbrock];
     license = lib.licenses.gpl3;
     inherit version;
   };

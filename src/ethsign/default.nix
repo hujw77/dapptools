@@ -1,16 +1,17 @@
-{ stdenv, buildGoModule }:
+{ lib, buildGoModule }:
 
 buildGoModule rec {
   name = "ethsign-${version}";
-  version = "0.16.0.darwinia";
+  version = "0.17.1";
 
   src = ./.;
 
-  modSha256 = "099hf9518zqgsjv050qlxj3la9f66j8bbbafh8vgivrw5vd81m60";
-  
-  meta = with stdenv.lib; {
+  vendorSha256 = "1zbsq1lyqinyzv5x4p1xgkxsyb7y92fbmf44gyaix34xrag5s27m";
+  runVend = true;
+
+  meta = {
     homepage = http://github.com/dapphub/dapptools;
     description = "Make raw signed Ethereum transactions";
-    license = [licenses.agpl3];
+    license = [lib.licenses.agpl3];
   };
 }

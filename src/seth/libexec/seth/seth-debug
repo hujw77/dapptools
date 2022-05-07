@@ -23,6 +23,7 @@ gitopts=(-q --no-verify --no-gpg-sign --allow-empty -m "dapp test")
 
 targetTx=$(seth tx "$1")
 
+# TODO: scary rm -rf
 tidy() {
   [[ "$SRCDIR" ]] && rm -rf "$SRCDIR"
   rm -rf "$state"
@@ -32,8 +33,8 @@ trap tidy SIGINT SIGTERM
 if [[ -z "$SETH_NOSRC" ]]; then
   echo >&2 "${0##*/}: info: fetching contract source from etherscan..."
   SRCDIR=$(TMPDIR=. mktemp -d seth.debug.XXXX -p /tmp)
-  if seth bundle-source "$(<<< "$targetTx" seth --field to)" --dir "$SRCDIR" > "$SRCDIR"/combined.json ; then
-    opts=(--source "$SRCDIR"/combined.json);
+  if seth bundle-source "$(<<< "$targetTx" seth --field to)" --dir "$SRCDIR" > "$SRCDIR"/standard.json ; then
+    opts=(--source "$SRCDIR"/standard.json);
   else
     echo >&2 "${0##*/}: warning: no source available"
   fi
@@ -51,7 +52,7 @@ for i in "${txs[@]}"; do
 
   if [[ "$1" = "$hash" ]]; then
     echo -e >&2 "\r${0##*/}: info: transaction ($j/$index)"
-    seth run-tx "$tx" --state "$state" --debug "${opts[@]}"
+    seth run-tx "$hash" --state "$state" --debug "${opts[@]}"
     tidy
     break
   else
@@ -59,7 +60,7 @@ for i in "${txs[@]}"; do
       echo -e  >&2 "\r${0##*/}: info: transaction ($j/$index)" ||
       echo -en >&2 "\r${0##*/}: info: transaction ($j/$index)"
     # exit code 2 means REVERT or otherwise acceptable failure
-    seth run-tx "$tx" --state "$state" --timestamp "$timestamp" > /dev/null ||
+    seth run-tx "$hash" --state "$state" --timestamp "$timestamp" > /dev/null ||
       [[ $? == 2 ]] ||
       (tidy; echo ""; seth --fail "${0##*/}: error: hevm error while executing tx: $hash")
     j=$((j + 1))

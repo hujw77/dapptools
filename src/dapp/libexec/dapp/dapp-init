@@ -45,6 +45,7 @@ deploy :; dapp create $type
 .
 
 create "src/$type.sol" <<.
+// SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity ^${solc_version};
 
 contract $type {
@@ -52,6 +53,7 @@ contract $type {
 .
 
 create "src/$type.t.sol" <<.
+// SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity ^${solc_version};
 
 import "ds-test/test.sol";
@@ -78,4 +80,4 @@ contract ${type}Test is DSTest {
 git add -A
 (set -x; git commit -m "dapp init $type")
 (set -x; dapp install ds-test)
-(set -x; make test)
+(set -x; DAPP_REMAPPINGS="$(dapp-remappings)" make test)

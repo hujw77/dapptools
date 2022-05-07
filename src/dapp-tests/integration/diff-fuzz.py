@@ -1,12 +1,15 @@
 import json
 import os
 
-from hypothesis import given, example, settings, note, target
+from hypothesis import given, example, settings, note, target, Phase
 from hypothesis.strategies import binary
 
 
 
-@settings(max_examples=0, deadline=1000)
+@settings(
+    deadline=2000,
+    phases=[Phase.explicit, Phase.reuse]
+)
 @given(binary(min_size=1))
 # these are meant without the prefix
 @example(bytes.fromhex('60016000036000f3'))
@@ -19,7 +22,7 @@ from hypothesis.strategies import binary
 @example(bytes.fromhex('45'))
 @example(bytes.fromhex('46'))
 @example(bytes.fromhex('4151'))
-@example(bytes.fromhex('303b3b'))
+# @example(bytes.fromhex('303b3b')) (geth thinks `this` is cold, hevm disagrees)
 @example(bytes.fromhex('6219000151'))
 @example(bytes.fromhex('600134f3'))
 @example(bytes.fromhex('600141fd'))
@@ -39,8 +42,8 @@ def test_compare_geth_hevm(b):
     note("code that caused failure: ")
     note(code)
     # prepopulate the stack a bit
-    x = os.system('evm --code ' + code + ' --gas 0xfffffffff --json --receiver 0xacab --nomemory run  > gethout')
-    y = os.system('hevm exec --code ' + code + ' --gas 0xfffffffff --chainid 0x539 --gaslimit 0xfffffffff --jsontrace --origin 0x73656e646572 --caller 0x73656e646572 > hevmout')
+    x = os.system('evm --code ' + code + ' --gas 0xffffffffffffffff --json --receiver 0xacab --nomemory --prestate ./genesis.json run  > gethout')
+    y = os.system('hevm exec --code ' + code + ' --gas 0xffffffffffffffff --chainid 0x539 --gaslimit 0xfffffffff --jsontrace --origin 0x73656e646572 --caller 0x73656e646572 > hevmout')
     assert x == y
     gethlines = open('gethout').read().split('\n')
     hevmlines = open('hevmout').read().split('\n')
@@ -75,5 +78,5 @@ def test_compare_geth_hevm(b):
     note(hevmres)
     assert gethres['output'] == hevmres['output']
     assert gethres['gasUsed'] == hevmres['gasUsed']
-        
+
 test_compare_geth_hevm()

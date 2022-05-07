@@ -11,6 +11,7 @@ module EVM.Flatten (flatten) where
 -- using only the source code metadata support modules.
 
 import EVM.Dapp (DappInfo, dappSources)
+import EVM.Types (regexMatches)
 import EVM.Solidity (sourceAsts)
 import EVM.Demand (demand)
 
@@ -35,12 +36,11 @@ import qualified Data.SemVer as SemVer
 import Control.Monad (forM)
 import Data.ByteString (ByteString)
 import Data.Foldable (foldl', toList)
-import Data.List (sort, nub)
+import Data.List (sort, nub, (\\))
 import Data.Map (Map, (!), (!?))
 import Data.Maybe (mapMaybe, isJust, catMaybes, fromMaybe)
-import Data.Monoid ((<>))
 import Data.Text (Text, unpack, pack, intercalate)
-import Data.Text.Encoding (encodeUtf8)
+import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import Text.Read (readMaybe)
 
 import qualified Data.Map as Map
@@ -49,6 +49,13 @@ import qualified Data.ByteString as BS
 
 -- Define an alias for FGL graphs with text nodes and unlabeled edges.
 type FileGraph = Fgl.Gr Text ()
+
+-- | Get field either inside 'attributes' object (combined-json format)
+-- or directly.
+getAttribute :: Text -> Value -> Maybe Value
+getAttribute s v = case preview (key "attributes" . key s) v of
+  Nothing -> preview (key s) v
+  Just r  -> Just r
 
 -- Given the AST of a source file, resolve all its imported paths.
 importsFrom :: Value -> [Text]
@@ -63,11 +70,14 @@ importsFrom ast =
     -- and if so, return its resolved import path.
     resolveImport :: Value -> Maybe Text
     resolveImport node =
-      case preview (key "name") node of
-        Just (String "ImportDirective") ->
-          preview (key "attributes" . key "absolutePath" . _String) node
+      case preview (key "nodeType") node of
+        Just (String "ImportDirective") -> view _String <$> getAttribute "absolutePath" node
         _ ->
-          Nothing
+          case preview (key "name") node of
+            Just (String "ImportDirective") ->
+              view _String <$> getAttribute "absolutePath" node
+            _ ->
+              Nothing
 
   -- Now we just try to resolve import paths at all subnodes.
   in mapMaybe resolveImport allNodes
@@ -112,10 +122,10 @@ flatten dapp target = do
       Map.fromList
         $ indexed [ x | x <- xs, (snd x) `elem` xs' ]
       where
-        xs = mconcat $ fmap f $ Map.elems asts
+        xs = concatMap f $ Map.elems asts
         xs' = repeated $ fmap snd xs
-        scope = preview (key "attributes" . key "scope" . _Integer)
-        name = preview (key "attributes" . key "name" . _String)
+        scope x = getAttribute "scope" x >>= preview _Integer
+        name x = getAttribute "name" x >>= preview _String
         id' = preview (key "id" . _Integer)
         p x = (nodeIs "ContractDefinition" x || nodeIs "StructDefinition" x)
           && (fromJust' "no contract/struct scope" $ scope x) `elem` topScopeIds
@@ -130,11 +140,11 @@ flatten dapp target = do
     contractStructs :: [(Integer, (Integer, Text))]
     contractStructs = mconcat $ fmap f $ Map.elems asts
       where
-        scope = preview (key "attributes" . key "scope" . _Integer)
-        cname = preview (key "attributes" . key "canonicalName" . _String)
+        scope x = getAttribute "scope" x >>= preview _Integer
+        cname x = getAttribute "canonicalName" x >>= preview _String
         id' = preview (key "id" . _Integer)
         p x = (nodeIs "StructDefinition" x)
-          && (fromJust' "line:137 nested struct" $ scope x) `Map.member` contractsAndStructsToRename
+          && (fromJust' "nested struct" $ scope x) `Map.member` contractsAndStructsToRename
         f ast =
           [ let
               id'' = fromJust' "no id for nested struct" $ id' node
@@ -169,6 +179,8 @@ flatten dapp target = do
         pragma :: Text
         pragma = maximalPragma (Map.elems (Map.filterWithKey (\k _ -> k `elem` ordered) asts))
 
+        license :: Text
+        license = joinLicenses (Map.elems (Map.filterWithKey (\k _ -> k `elem` ordered) asts))
       -- Read the source files in order and strip unwanted directives.
       -- Also add an informative comment with the original source file path.
       sources <-
@@ -181,8 +193,9 @@ flatten dapp target = do
                 (prefixContractAst
                   contractsAndStructsToRename
                   contractStructs
-                  (stripImportsAndPragmas (src, 0) (asts ! path))
-                  (asts ! path)), "\n"
+                  (stripImportsAndPragmas (stripLicense src) (asts ! path))
+                  (asts ! path))
+            , "\n"
             ]
 
       -- Force all evaluation before any printing happens, to avoid
@@ -191,15 +204,22 @@ flatten dapp target = do
 
       -- Finally print the whole concatenation.
       putStrLn $ "// hevm: flattened sources of " <> unpack target
+      putStrLn (unpack license)
       putStrLn (unpack pragma)
       BS.putStr (mconcat sources)
 
--- Construct a new Solidity version pragma for the highest mentioned version
--- given a list of source file ASTs.
+joinLicenses :: [Value] -> Text
+joinLicenses asts =
+  case nub $ mapMaybe (\ast -> getAttribute "license" ast >>= preview _String) asts of
+    [] -> ""
+    x -> "// SPDX-License-Identifier: " <> intercalate " AND " x
+
+-- | Construct a new Solidity version pragma for the highest mentioned version
+--  given a list of source file ASTs.
 maximalPragma :: [Value] -> Text
 maximalPragma asts = (
     case mapMaybe versions asts of
-      [] -> error "no Solidity version pragmas in any source files"
+      [] -> "" -- allow for no pragma
       xs ->
         "pragma solidity "
           <> pack (show (rangeIntersection xs))
@@ -218,10 +238,8 @@ maximalPragma asts = (
 
   where
     isVersionPragma :: [Value] -> Bool
-    isVersionPragma =
-      \case
-        String "solidity" : _ -> True
-        _ -> False
+    isVersionPragma (String "solidity" : _) = True
+    isVersionPragma _ = False
 
     pragmaComponents :: Value -> [[Value]]
     pragmaComponents ast = components
@@ -230,8 +248,9 @@ maximalPragma asts = (
         ps = filter (nodeIs "PragmaDirective") (universe ast)
 
         components :: [[Value]]
-        components = catMaybes $ fmap
-          ((fmap toList) . preview (key "attributes" . key "literals" . _Array))
+        components = catMaybes $
+          fmap
+          ((fmap toList) . (\x -> getAttribute "literals" x >>= preview _Array))
           ps
 
     -- Simple way to combine many SemVer ranges.  We don't actually
@@ -272,7 +291,17 @@ nodeIs t x = isSourceNode && hasRightName
       isJust (preview (key "src") x)
     hasRightName =
       Just t == preview (key "name" . _String) x
+      || Just t == preview (key "nodeType" . _String) x
 
+-- | Removes all lines containing "SPDX-License-Identifier"
+stripLicense :: ByteString -> (ByteString, Int)
+stripLicense bs =
+  (encodeUtf8 $ Text.unlines (lines' \\ licenseLines), - sum (((1 +) . Text.length) <$> licenseLines))
+  where lines' = Text.lines $ decodeUtf8 bs
+        licenseLines = filter (regexMatches "SPDX-License-Identifier") lines'
+
+-- | (bytes, offset) where offset is added or incremeneted as text is
+-- inserted or removed from the source file
 stripImportsAndPragmas :: (ByteString, Int) -> Value -> (ByteString, Int)
 stripImportsAndPragmas bso ast = stripAstNodes bso ast p
   where
@@ -305,8 +334,8 @@ prefixContractAst :: Map Integer Text -> [(Integer, (Integer, Text))] -> (ByteSt
 prefixContractAst castr cs bso ast = prefixAstNodes
   where
     bs = fst bso
-    refDec = preview (key "attributes" . key "referencedDeclaration" . _Integer)
-    name = preview (key "attributes" . key "name" . _String)
+    refDec x = getAttribute "referencedDeclaration" x >>= preview _Integer
+    name x = getAttribute "name" x >>= preview _String
     id' = preview (key "id" . _Integer)
 
     -- Is node top level defined type (contract/interface/struct)
@@ -316,7 +345,7 @@ prefixContractAst castr cs bso ast = prefixAstNodes
     -- Is node identifier that is referencing top level defined type
     p' x =
       (nodeIs "Identifier" x || nodeIs "UserDefinedTypeName" x)
-        && (fromJust' "refDec of ident/userdef" $ refDec x) `Map.member` castr
+        && (isJust $ refDec x) && (fromJust' "refDec of ident/userdef" $ refDec x) `Map.member` castr
 
     -- Is node identifier that is referencing a struct nested in a top level
     -- defined contract/interface
@@ -362,10 +391,8 @@ prefixContractAst castr cs bso ast = prefixAstNodes
 
       where
         (start, end) = sourceRange v
-        x :: Maybe (Int, Integer)
-        x = case preview (key "name" . _String) v of
-          Just t
-            | t `elem` ["ContractDefinition", "StructDefinition"] ->
+        f :: Text -> Maybe (Int, Integer)
+        f t | t `elem` ["ContractDefinition", "StructDefinition"] =
               let
                 name' = encodeUtf8 $ fromJust' "no name for contract/struct" $ name v
                 bs' = snd $ BS.splitAt (start + snd bso) bs
@@ -374,12 +401,18 @@ prefixContractAst castr cs bso ast = prefixAstNodes
                   + (BS.length name')
               in
                 fmap ((,) pos) $ id' v
-            | t `elem` ["UserDefinedTypeName", "Identifier"] ->
+            | t `elem` ["UserDefinedTypeName", "Identifier"] =
               fmap ((,) end) $ refDec v
-            | otherwise ->
+            | otherwise =
+                error $ "internal error: not a contract reference: " ++ show t
+
+        x :: Maybe (Int, Integer)
+        x = case preview (key "nodeType" . _String) v of
+          Just t -> f t
+          Nothing -> case preview (key "name" . _String) v of
+            Just t -> f t
+            Nothing ->
               error "internal error: not a contract reference"
-          Nothing ->
-            error "internal error: not a contract reference"
 
     -- Prefix a set of non-overlapping ranges from a bytestring
     -- by commenting them out.

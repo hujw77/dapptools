@@ -95,6 +95,7 @@ let
     "loops/while_1_infinite.sol"
 
     # --- hevm timeout ---
+
     "types/array_dynamic_3_fail.sol"
     "types/array_aliasing_storage_1.sol"
     "types/array_aliasing_memory_1.sol"
@@ -190,6 +191,11 @@ let
     "types/mapping_as_parameter_1.sol"
     "types/mapping_as_local_var_1.sol"
 
+    # --- solc 0.8 ---
+
+    "modifiers/modifier_code_after_placeholder.sol" # assertion can't trigger post 0.8 due to overflow checking
+    "special/many.sol" # no longer compiles
+
   ];
 
   # --- test scripts ---
@@ -236,7 +242,7 @@ let
 
     explore() {
       set -x
-      hevm_output=$(${timeout} 90s ${hevm} symbolic --code "$1" --solver "$2" --json-file "$3" $4 2>&1)
+      hevm_output=$(${timeout} 90s ${hevm} symbolic --smttimeout 20000 --code "$1" --solver "$2" --json-file "$3" $4 2>&1)
       status=$?
       set +x
 

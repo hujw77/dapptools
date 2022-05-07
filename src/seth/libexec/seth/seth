@@ -19,6 +19,7 @@
 ###    -F, --from=<sender>        account to send transaction from
 ###    -G, --gas=<number>         number of gas units to provide
 ###    -P, --gas-price=<number>   price (in wei) of each gas unit
+###    -T, --prio-fee             max priority fee (miner tip) in wei per gas
 ###    -N, --nonce=<number>       nonce value to use for the transaction
 ###    -V, --value=<number>       amount (in wei) of ETH to send
 ###    -S, --password=<file>      password for non-interactive signing
@@ -46,9 +47,13 @@
 ###
 ###    --debug                    run in hevm interactive mode
 ###    --trace                    dump a trace to stderr
+###    --no-src                   don't try to fetch contract source
 ###    --source=<file>            path to combined.json source
 ###    --state=<dir>              directory to store hevm state in
 ###
+### Options for seth-4byte-decode(1):
+###
+###    --id                       'earliest' or 'latest' or the ID number of a particular signature
 ###
 ### Other options:
 ###
@@ -71,6 +76,7 @@ keystore=dir         local keystore directory
 F,from=address       account to send transaction from
 G,gas=number         number of gas units to provide
 P,gas-price=number   price (in wei) of each gas unit
+T,prio-fee=number    max priority fee (miner tip) in wei per gas
 N,nonce=number       nonce value to use for the transaction
 V,value=number       amount (in wei) of ETH to send
 S,password=file      password for non-interactive signing
@@ -104,6 +110,9 @@ no-src               don't fetch contract source
   Options for seth-bundle-source(1):
 D,dir=directory      directory to store output
 
+  Options for seth-4byte-decode(1):
+id=string|number     'earliest' or 'latest' or the ID number of a particular signature
+
   Other options:
 async                do not wait for transaction receipt
 follow               go into a loop watching for new logs
@@ -134,6 +143,8 @@ eval "$(git rev-parse --parseopt -- "$@" <<<"$OPTS" || echo exit $?)"
 # To be reviewed in the future. It should be set depending on the chain:
 export SETH_STATUS=yes
 
+shopt -s extglob
+
 while [[ $1 ]]; do
   case $1 in
     --)              shift; break;;
@@ -147,9 +158,12 @@ while [[ $1 ]]; do
     -C|--chain)      shift; export SETH_CHAIN=$1;;
 
     -B|--block)      shift; export ETH_BLOCK=$1;;
-    -F|--from)       shift; export ETH_FROM=$1;;
+    -F|--from)       shift; export ETH_FROM=$(seth --to-address $1);;
     -G|--gas)        shift; export ETH_GAS=$1;;
-    -P|--gas-price)  shift; export ETH_GAS_PRICE=$1;;
+    -P|--gas-price)  shift;
+      export ETH_GAS_PRICE=$(seth --to-wei ${1%gwei} ${1##*([0-9])});;
+    -T|--prio-fee)   shift;
+      export ETH_PRIO_FEE=$(seth --to-wei ${1%gwei} ${1##*([0-9])});;
     -N|--nonce)      shift; export ETH_NONCE=$1;;
     -V|--value)      shift; export ETH_VALUE=$1;;
     -S|--password)   shift; export ETH_PASSWORD=$1;;
@@ -178,6 +192,7 @@ while [[ $1 ]]; do
        --async)             export SETH_ASYNC=yes;;
        --follow)            export SETH_FOLLOW=yes;;
     -j|--json)              export SETH_JSON=yes;;
+       --id)         shift; export SETH_4BYTE_ID=$1;;
 
     *) printf "${0##*/}: internal error: %q\\n" "$1"; exit 1
   esac; shift
@@ -186,7 +201,6 @@ done
 keystores=()
 
 if [[ $SETH_CHAIN ]]; then
-  export ETH_LOGS_API=${SETH_LOGS_API:-etherscan}
 
   case "$SETH_CHAIN" in
     ethlive|mainnet)
@@ -208,6 +222,30 @@ if [[ $SETH_CHAIN ]]; then
         ~/{.local/share,Library/Application\ Support}/io.parity.ethereum/keys/"$SETH_CHAIN"/
       )
       ;;
+    optimism-mainnet)
+      eth_rpc_url=https://optimism-mainnet.infura.io/$INFURA_KEY
+      export ETHERSCAN_API_URL=https://api-optimistic.etherscan.io/api
+      ;;
+    optimism-kovan)
+      eth_rpc_url=https://optimism-kovan.infura.io/$INFURA_KEY
+      export ETHERSCAN_API_URL=https://api-kovan-optimistic.etherscan.io/api
+      ;;
+    arbitrum-mainnet)
+      eth_rpc_url=https://arbitrum-mainnet.infura.io/$INFURA_KEY
+      export ETHERSCAN_API_URL=https://api.arbiscan.io/api
+      ;;
+    bsctest)
+      eth_rpc_url=https://data-seed-prebsc-2-s1.binance.org:8545/
+      export ETHERSCAN_API_URL=https://api-testnet.bscscan.com/api
+      ;;
+    bsc)
+      eth_rpc_url=https://bsc-dataseed3.binance.org/
+      export ETHERSCAN_API_URL=https://api.bscscan.com/api
+      ;;
+    polygon)
+      eth_rpc_url=https://polygon-rpc.com/
+      export ETHERSCAN_API_URL=https://api.polygonscan.com/api
+      ;;
     *)
       echo >&2 "${0##*/}: error: unknown chain: \\'$SETH_CHAIN'"
       exit 1
@@ -223,5 +261,14 @@ fi
 
 [[ -n $ETH_KEYSTORE ]] && export ETH_KEYSTORE
 export ETH_RPC_URL=${ETH_RPC_URL:-${eth_rpc_url:-${ETH_RPC_HOST:-http://127.0.0.1}:${ETH_RPC_PORT:-8545}}}
+
+if ! [ -x "$(command -v "${0##*/}-${1-help}")" ]; then
+    # look for approximate matches
+    echo >&2 "'$1' is not a seth command. See 'seth help'."
+    echo >&2
+    echo >&2 "Most similar commands:"
+    find "${0%seth}" -execdir echo {} ';' | agrep -1 "${0##*/}-${1-help}" >&2
+    exit 1
+fi
 
 "${0##*/}-${1-help}" "${@:2}"

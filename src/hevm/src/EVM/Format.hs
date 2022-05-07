@@ -1,42 +1,42 @@
 {-# Language DataKinds #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# Language ImplicitParams #-}
 {-# Language TemplateHaskell #-}
 module EVM.Format where
 
 import Prelude hiding (Word)
-
+import qualified EVM
+import EVM.Dapp (DappInfo (..), dappSolcByHash, dappAbiMap, showTraceLocation, dappEventMap, dappErrorMap)
+import EVM.Dapp (DappContext (..), contextInfo, contextEnv)
+import EVM.Concrete ( wordValue )
 import EVM (VM, VMResult(..), cheatCode, traceForest, traceData, Error (..), result)
-import EVM (Trace, TraceData (..), Log (..), Query (..), FrameContext (..))
-import EVM.Dapp (DappInfo (..), dappSolcByHash, dappAbiMap, dappEventMap)
-import EVM.Dapp (showTraceLocation)
-import EVM.Concrete (Word (..), wordValue)
+import EVM (Trace, TraceData (..), Log (..), Query (..), FrameContext (..), Storage(..))
 import EVM.SymExec
-import EVM.Symbolic (maybeLitWord, len)
-import EVM.Types (W256 (..), num, Buffer(..), ByteStringS(..))
-import EVM.ABI (AbiValue (..), Event (..), AbiType (..))
-import EVM.ABI (Indexed (NotIndexed), getAbiSeq, getAbi)
-import EVM.ABI (parseTypeName)
-import EVM.Solidity (SolcContract, contractName, abiMap)
+import EVM.Symbolic (len, litWord)
+import EVM.Types (maybeLitWord, Word (..), Whiff(..), SymWord(..), W256 (..), num, word)
+import EVM.Types (Addr, Buffer(..), ByteStringS(..))
+import EVM.ABI (AbiValue (..), Event (..), AbiType (..), SolError (..))
+import EVM.ABI (Indexed (NotIndexed), getAbiSeq)
+import EVM.ABI (parseTypeName, formatString)
+import EVM.Solidity (SolcContract(..), contractName, abiMap)
 import EVM.Solidity (methodOutput, methodSignature, methodName)
 
 import Control.Arrow ((>>>))
-import Control.Lens (view, preview, ix, _2, to, _Just, makeLenses, over)
+import Control.Lens (view, preview, ix, _2, to, makeLenses, over, each, (^?!))
 import Data.Binary.Get (runGetOrFail)
+import Data.Bits       (shiftR)
 import Data.ByteString (ByteString)
 import Data.ByteString.Builder (byteStringHex, toLazyByteString)
 import Data.ByteString.Lazy (toStrict, fromStrict)
 import Data.DoubleWord (signedWord)
 import Data.Foldable (toList)
 import Data.Maybe (catMaybes, fromMaybe)
-import Data.Monoid ((<>))
 import Data.Text (Text, pack, unpack, intercalate)
 import Data.Text (dropEnd, splitOn)
 import Data.Text.Encoding (decodeUtf8, decodeUtf8')
 import Data.Tree (Tree (Node))
 import Data.Tree.View (showTree)
-import Data.Vector (Vector, fromList)
-
-import Numeric (showHex)
+import Data.Vector (Vector)
+import Data.Word (Word32)
 
 import qualified Data.ByteString as BS
 import qualified Data.Char as Char
@@ -79,64 +79,86 @@ humanizeInteger =
   . Text.pack
   . show
 
--- TODO: make polymorphic
-showAbiValues :: Vector AbiValue -> Text
-showAbiValues vs =
-  "(" <> intercalate ", " (toList (fmap showAbiValue vs)) <> ")"
-
-showAbiArray :: Vector AbiValue -> Text
-showAbiArray vs =
-  "[" <> intercalate ", " (toList (fmap showAbiValue vs)) <> "]"
-
-showAbiValue :: AbiValue -> Text
-showAbiValue (AbiUInt _ w) =
-  pack $ show w
-showAbiValue (AbiInt _ w) =
-  pack $ show w
-showAbiValue (AbiBool b) =
-  pack $ show b
-showAbiValue (AbiAddress w160) =
-  pack $ "0x" ++ (showHex w160 "")
+showAbiValue :: (?context :: DappContext) => AbiValue -> Text
 showAbiValue (AbiBytes _ bs) =
-  formatBytes bs
-showAbiValue (AbiBytesDynamic bs) =
-  formatBinary bs
-showAbiValue (AbiString bs) =
-  formatQString bs
-showAbiValue (AbiArray _ _ xs) =
-  showAbiArray xs
-showAbiValue (AbiArrayDynamic _ xs) =
-  showAbiArray xs
-showAbiValue (AbiTuple v) =
-  showAbiValues v
+  formatBytes bs  -- opportunistically decodes recognisable strings
+showAbiValue (AbiAddress addr) =
+  let dappinfo = view contextInfo ?context
+      contracts = view contextEnv ?context
+      name = case (Map.lookup addr contracts) of
+        Nothing -> ""
+        Just contract ->
+          let hash = view EVM.codehash contract
+              solcContract = (preview (dappSolcByHash . ix hash . _2) dappinfo)
+          in maybeContractName' solcContract
+  in
+    name <> "@" <> (pack $ show addr)
+showAbiValue v = pack $ show v
 
+showAbiValues :: (?context :: DappContext) => Vector AbiValue -> Text
+showAbiValues vs = parenthesise (textAbiValues vs)
+
+textAbiValues :: (?context :: DappContext) => Vector AbiValue -> [Text]
+textAbiValues vs = toList (fmap showAbiValue vs)
+
+textValues :: (?context :: DappContext) => [AbiType] -> Buffer -> [Text]
+textValues ts (SymbolicBuffer  _) = [pack $ show t | t <- ts]
+textValues ts (ConcreteBuffer bs) =
+  case runGetOrFail (getAbiSeq (length ts) ts) (fromStrict bs) of
+    Right (_, _, xs) -> textAbiValues xs
+    Left (_, _, _)   -> [formatBinary bs]
+
+parenthesise :: [Text] -> Text
+parenthesise ts = "(" <> intercalate ", " ts <> ")"
+
+showValues :: (?context :: DappContext) => [AbiType] -> Buffer -> Text
+showValues ts b = parenthesise $ textValues ts b
+
+showValue :: (?context :: DappContext) => AbiType -> Buffer -> Text
+showValue t b = head $ textValues [t] b
+
+showCall :: (?context :: DappContext) => [AbiType] -> Buffer -> Text
+showCall ts (SymbolicBuffer bs) = showValues ts $ SymbolicBuffer (drop 4 bs)
+showCall ts (ConcreteBuffer bs) = showValues ts $ ConcreteBuffer (BS.drop 4 bs)
+
+showError :: (?context :: DappContext) => ByteString -> Text
+showError bs =
+  let dappinfo = view contextInfo ?context
+      bs4 = BS.take 4 bs
+  in case Map.lookup (word bs4) (view dappErrorMap dappinfo) of
+      Just (SolError errName ts) -> errName <> " " <> showCall ts (ConcreteBuffer bs)
+      Nothing -> case bs4 of
+                  -- Method ID for Error(string)
+                  "\b\195y\160" -> showCall [AbiStringType] (ConcreteBuffer bs)
+                  _             -> formatBinary bs
+
+-- the conditions under which bytes will be decoded and rendered as a string
 isPrintable :: ByteString -> Bool
 isPrintable =
   decodeUtf8' >>>
-    either (const False)
-      (Text.all (not . Char.isControl))
+    either
+      (const False)
+      (Text.all (\c-> Char.isPrint c && (not . Char.isControl) c))
 
 formatBytes :: ByteString -> Text
 formatBytes b =
   let (s, _) = BS.spanEnd (== 0) b
   in
     if isPrintable s
-    then formatQString s
+    then formatBString s
     else formatBinary b
 
 formatSBytes :: Buffer -> Text
 formatSBytes (SymbolicBuffer b) = "<" <> pack (show (length b)) <> " symbolic bytes>"
 formatSBytes (ConcreteBuffer b) = formatBytes b
 
-formatQString :: ByteString -> Text
-formatQString = pack . show
-
-formatString :: ByteString -> Text
-formatString bs = decodeUtf8 (fst (BS.spanEnd (== 0) bs))
+-- a string that came from bytes, displayed with special quotes
+formatBString :: ByteString -> Text
+formatBString b = mconcat [ "«",  Text.dropAround (=='"') (pack $ formatString b), "»" ]
 
 formatSString :: Buffer -> Text
 formatSString (SymbolicBuffer bs) = "<" <> pack (show (length bs)) <> " symbolic bytes (string)>"
-formatSString (ConcreteBuffer bs) = formatString bs
+formatSString (ConcreteBuffer bs) = pack $ formatString bs
 
 formatBinary :: ByteString -> Text
 formatBinary =
@@ -147,15 +169,18 @@ formatSBinary (SymbolicBuffer bs) = "<" <> pack (show (length bs)) <> " symbolic
 formatSBinary (ConcreteBuffer bs) = formatBinary bs
 
 showTraceTree :: DappInfo -> VM -> Text
-showTraceTree dapp =
-  traceForest
-    >>> fmap (fmap (unpack . showTrace dapp))
-    >>> concatMap showTree
-    >>> pack
+showTraceTree dapp vm =
+  let forest = traceForest vm
+      traces = fmap (fmap (unpack . showTrace dapp vm)) forest
+  in pack $ concatMap showTree traces
 
-showTrace :: DappInfo -> Trace -> Text
-showTrace dapp trace =
-  let
+unindexed :: [(Text, AbiType, Indexed)] -> [AbiType]
+unindexed ts = [t | (_, t, NotIndexed) <- ts]
+
+showTrace :: DappInfo -> VM -> Trace -> Text
+showTrace dapp vm trace =
+  let ?context = DappContext { _contextInfo = dapp, _contextEnv = vm ^?! EVM.env . EVM.contracts }
+  in let
     pos =
       case showTraceLocation dapp trace of
         Left x -> " \x1b[1m" <> x <> "\x1b[0m"
@@ -163,37 +188,62 @@ showTrace dapp trace =
     fullAbiMap = view dappAbiMap dapp
   in case view traceData trace of
     EventTrace (Log _ bytes topics) ->
-      case topics of
-        [] ->
-          mconcat
+      let logn = mconcat
             [ "\x1b[36m"
-            , "log0("
-            , formatSBinary bytes
-            , ")"
+            , "log" <> (pack (show (length topics)))
+            , parenthesise ((map (pack . show) topics) ++ [formatSBinary bytes])
             , "\x1b[0m"
             ] <> pos
-        (topic:_) ->
-          let unknownTopic =                    -- todo: catch ds-note
-                   mconcat
-                     [ "\x1b[36m"
-                     , "log" <> (pack (show (length topics))) <> "("
-                     , formatSBinary bytes <> ", "
-                     , intercalate ", " (map (pack . show) topics) <> ")"
-                     , "\x1b[0m"
-                     ] <> pos
-
-          in case maybeLitWord topic of
-            Just top -> case Map.lookup (wordValue top) (view dappEventMap dapp) of
-                 Just (Event name _ types) ->
-                   mconcat
-                     [ "\x1b[36m"
-                     , name
-                     , showValues [t | (t, NotIndexed) <- types] bytes
-                     -- todo: show indexed
-                     , "\x1b[0m"
-                     ] <> pos
-                 Nothing -> unknownTopic
-            Nothing -> unknownTopic
+          knownTopic name types = mconcat
+            [ "\x1b[36m"
+            , name
+            , showValues (unindexed types) bytes
+            -- todo: show indexed
+            , "\x1b[0m"
+            ] <> pos
+          lognote sig usr = mconcat
+            [ "\x1b[36m"
+            , "LogNote"
+            , parenthesise [sig, usr, "..."]
+            , "\x1b[0m"
+            ] <> pos
+      in case topics of
+        [] ->
+          logn
+        (t1:_) ->
+          case maybeLitWord t1 of
+            Just topic ->
+              case Map.lookup (wordValue topic) (view dappEventMap dapp) of
+                Just (Event name _ types) ->
+                  knownTopic name types
+                Nothing ->
+                  case topics of
+                    [_, t2, _, _] ->
+                      -- check for ds-note logs.. possibly catching false positives
+                      -- event LogNote(
+                      --     bytes4   indexed  sig,
+                      --     address  indexed  usr,
+                      --     bytes32  indexed  arg1,
+                      --     bytes32  indexed  arg2,
+                      --     bytes             data
+                      -- ) anonymous;
+                      let
+                        sig = fromIntegral $ shiftR (wordValue topic) 224 :: Word32
+                        usr = case maybeLitWord t2 of
+                          Just w ->
+                            pack $ show $ (fromIntegral w :: Addr)
+                          Nothing  ->
+                            "<symbolic>"
+                      in
+                        case Map.lookup sig (view dappAbiMap dapp) of
+                          Just m ->
+                           lognote (view methodSignature m) usr
+                          Nothing ->
+                            logn
+                    _ ->
+                      logn
+            Nothing ->
+              logn
 
     QueryTrace q ->
       case q of
@@ -201,10 +251,12 @@ showTrace dapp trace =
           "fetch contract " <> pack (show addr) <> pos
         PleaseFetchSlot addr slot _ ->
           "fetch storage slot " <> pack (show slot) <> " from " <> pack (show addr) <> pos
-        PleaseAskSMT _ _ _ ->
+        PleaseAskSMT {} ->
           "ask smt" <> pos
-        PleaseMakeUnique _ _ _ ->
+        PleaseMakeUnique {} ->
           "make unique value" <> pos
+        PleaseDoFFI cmd _ ->
+          "execute ffi " <> pack (show cmd) <> pos
 
     ErrorTrace e ->
       case e of
@@ -213,21 +265,17 @@ showTrace dapp trace =
         _ ->
           "\x1b[91merror\x1b[0m " <> pack (show e) <> pos
 
-    ReturnTrace out (CallContext _ _ _ _ hash (Just abi) _ _ _) ->
-      case getAbiMethodOutput dapp hash abi of
-        Nothing ->
-          "← " <>
-            case Map.lookup (fromIntegral abi) fullAbiMap of
-              Just m  ->
-                case (view methodOutput m) of
-                  Just (_, t) ->
-                    pack (show t) <> " " <> showValue t out
-                  Nothing ->
-                    formatSBinary out
-              Nothing ->
+    ReturnTrace out (CallContext _ _ _ _ _ (Just abi) _ _ _) ->
+      "← " <>
+        case Map.lookup (fromIntegral abi) fullAbiMap of
+          Just m  ->
+            case unzip (view methodOutput m) of
+              ([], []) ->
                 formatSBinary out
-        Just (_, t) ->
-          "← " <> pack (show t) <> " " <> showValue t out
+              (_, ts) ->
+                showValues ts out
+          Nothing ->
+            formatSBinary out
     ReturnTrace out (CallContext {}) ->
       "← " <> formatSBinary out
     ReturnTrace out (CreationContext {}) ->
@@ -235,8 +283,11 @@ showTrace dapp trace =
 
     EntryTrace t ->
       t
-    FrameTrace (CreationContext hash _ _ ) ->
-      "create " <> maybeContractName (preview (dappSolcByHash . ix hash . _2) dapp) <> pos
+    FrameTrace (CreationContext addr hash _ _ ) ->
+      "create "
+      <> maybeContractName (preview (dappSolcByHash . ix hash . _2) dapp)
+      <> "@" <> pack (show addr)
+      <> pos
     FrameTrace (CallContext target context _ _ hash abi calldata _ _) ->
       let calltype = if target == context
                      then "call "
@@ -270,16 +321,6 @@ showTrace dapp trace =
             <> "\x1b[0m"
             <> pos
 
-getAbiMethodOutput
-  :: DappInfo -> W256 -> Word -> Maybe (Text, AbiType)
-getAbiMethodOutput dapp hash abi =
-  -- Some typical ugly lens code. :'(
-  preview
-    ( dappSolcByHash . ix hash . _2 . abiMap
-    . ix (fromIntegral abi) . methodOutput . _Just
-    )
-    dapp
-
 getAbiTypes :: Text -> [Maybe AbiType]
 getAbiTypes abi = map (parseTypeName mempty) types
   where
@@ -287,33 +328,13 @@ getAbiTypes abi = map (parseTypeName mempty) types
       filter (/= "") $
         splitOn "," (dropEnd 1 (last (splitOn "(" abi)))
 
-showCall :: [AbiType] -> Buffer -> Text
-showCall ts (SymbolicBuffer bs) = showValues ts $ SymbolicBuffer (drop 4 bs)
-showCall ts (ConcreteBuffer bs) = showValues ts $ ConcreteBuffer (BS.drop 4 bs)
-
-showError :: ByteString -> Text
-showError bs = case BS.take 4 bs of
-  -- Method ID for Error(string)
-  "\b\195y\160" -> showCall [AbiStringType] (ConcreteBuffer bs)
-  _             -> formatBinary bs
-
-showValues :: [AbiType] -> Buffer -> Text
-showValues ts (SymbolicBuffer  _) = "symbolic: " <> (pack . show $ AbiTupleType (fromList ts))
-showValues ts (ConcreteBuffer bs) =
-  case runGetOrFail (getAbiSeq (length ts) ts) (fromStrict bs) of
-    Right (_, _, xs) -> showAbiValues xs
-    Left (_, _, _)   -> formatBinary bs
-
-showValue :: AbiType -> Buffer -> Text
-showValue t (SymbolicBuffer _) = "symbolic: " <> (pack $ show t)
-showValue t (ConcreteBuffer bs) =
-  case runGetOrFail (getAbi t) (fromStrict bs) of
-    Right (_, _, x) -> showAbiValue x
-    Left (_, _, _)  -> formatBinary bs
-
 maybeContractName :: Maybe SolcContract -> Text
 maybeContractName =
   maybe "<unknown contract>" (view (contractName . to contractNamePart))
+
+maybeContractName' :: Maybe SolcContract -> Text
+maybeContractName' =
+  maybe "" (view (contractName . to contractNamePart))
 
 maybeAbiName :: SolcContract -> Word -> Maybe Text
 maybeAbiName solc abi = preview (abiMap . ix (fromIntegral abi) . methodSignature) solc
@@ -324,7 +345,7 @@ contractNamePart x = Text.split (== ':') x !! 1
 contractPathPart :: Text -> Text
 contractPathPart x = Text.split (== ':') x !! 0
 
-prettyvmresult :: VMResult -> String
+prettyvmresult :: (?context :: DappContext) => VMResult -> String
 prettyvmresult (EVM.VMFailure (EVM.Revert ""))  = "Revert"
 prettyvmresult (EVM.VMFailure (EVM.Revert msg)) = "Revert" ++ (unpack $ showError msg)
 prettyvmresult (EVM.VMFailure (EVM.UnrecognizedOpcode 254)) = "Assertion violation"
@@ -336,48 +357,100 @@ prettyvmresult (EVM.VMSuccess (ConcreteBuffer msg)) =
 prettyvmresult (EVM.VMSuccess (SymbolicBuffer msg)) =
   "Return: " <> show (length msg) <> " symbolic bytes"
 
+currentSolc :: DappInfo -> VM -> Maybe SolcContract
+currentSolc dapp vm =
+  let
+    this = vm ^?! EVM.env . EVM.contracts . ix (view (EVM.state . EVM.contract) vm)
+    h = view EVM.codehash this
+  in
+    preview (dappSolcByHash . ix h . _2) dapp
+
 -- TODO: display in an 'act' format
-data BranchData = BranchData {
-  _navigation :: String,
-  _constraint :: String,
-  _leafData :: String
+
+-- TreeLine describes a singe line of the tree
+-- it contains the indentation which is prefixed to it
+-- and its content which contains the rest
+data TreeLine = TreeLine {
+  _indent   :: String,
+  _content  :: String
   }
 
-makeLenses ''BranchData
+makeLenses ''TreeLine
+
+-- SHOW TREE
 
 showTreeIndentSymbol :: Bool      -- ^ isLastChild
-                     -> Bool      -- ^ isFirstLine
+                     -> Bool      -- ^ isTreeHead
                      -> String
-showTreeIndentSymbol True  True  = "\x2514"
-showTreeIndentSymbol False True  = "\x251c"
+showTreeIndentSymbol True  True  = "\x2514" -- └
+showTreeIndentSymbol False True  = "\x251c" -- ├
 showTreeIndentSymbol True  False = " "
-showTreeIndentSymbol False False = "\x2502"
+showTreeIndentSymbol False False = "\x2502" -- │
 
-adjustTree :: String -> Int -> [BranchData] -> [BranchData]
-adjustTree cond i bds = let
-  indentChild = over navigation $ (<>) ((showTreeIndentSymbol (i == 1) False) <> " ")
-  children = map indentChild bds
-  branchPrefix = BranchData (showTreeIndentSymbol (i == 1) True <> " " <> show i) cond ""
-  in branchPrefix : children
+flattenTree :: Int -> -- total number of cases
+               Int -> -- case index
+               Tree [String] ->
+               [TreeLine]
+-- this case should never happen for our use case, here for generality
+flattenTree _ _ (Node [] _)  = []
 
-flattenTree :: Tree BranchInfo -> [BranchData]
--- leaf case
-flattenTree (Node bi []) = let
-  leafInfo = maybe (error "expected result") prettyvmresult (view result $ _vm bi)
-  in [BranchData "" "" leafInfo]
--- branch case
-flattenTree (Node bi xs) = let
-  cases = map flattenTree xs
-  cond = maybe "" show (_branchCondition bi)
-  prefixed = zipWith (adjustTree cond) [0..] cases
-  in concat prefixed
+flattenTree totalCases i (Node (x:xs) cs) = let
+  isLastCase       = i + 1 == totalCases
+  indenthead       = showTreeIndentSymbol isLastCase True <> " " <> show i <> " "
+  indentchild      = showTreeIndentSymbol isLastCase False <> " "
+  in TreeLine indenthead x
+  : ((TreeLine indentchild <$> xs) ++ over (each . indent) ((<>) indentchild) (flattenForest cs))
+
+flattenForest :: [Tree [String]] -> [TreeLine]
+flattenForest forest = concat $ zipWith (flattenTree (length forest)) [0..] forest
+
+leftpad :: Int -> String -> String
+leftpad n = (<>) $ replicate n ' '
+
+showTree' :: Tree [String] -> String
+showTree' (Node s []) = unlines s
+showTree' (Node _ children) =
+  let
+    treeLines = flattenForest children
+    maxIndent = 2 + maximum (length . _indent <$> treeLines)
+    showTreeLine (TreeLine colIndent colContent) =
+      let indentSize = maxIndent - length colIndent
+      in colIndent <> leftpad indentSize colContent
+  in unlines $ showTreeLine <$> treeLines
 
 
-showBranchTree :: Tree BranchInfo -> String
-showBranchTree tree = let
-  showBranchLine bd  = _navigation bd
-                      <> "    "
-                      <> _constraint bd
-                      <> "    "
-                      <> _leafData bd
-  in unlines $ showBranchLine <$> flattenTree tree
+-- RENDER TREE
+
+showStorage :: [(SymWord, SymWord)] -> [String]
+showStorage = fmap (\(k, v) -> show k <> " => " <> show v)
+
+showLeafInfo :: DappInfo -> BranchInfo -> [String]
+showLeafInfo srcInfo (BranchInfo vm _) = let
+  ?context = DappContext { _contextInfo = srcInfo, _contextEnv = vm ^?! EVM.env . EVM.contracts }
+  in let
+  self    = view (EVM.state . EVM.contract) vm
+  updates = case view (EVM.env . EVM.contracts) vm ^?! ix self . EVM.storage of
+    Symbolic v _ -> v
+    Concrete x -> [(litWord k,v) | (k, v) <- Map.toList x]
+  showResult = [prettyvmresult res | Just res <- [view result vm]]
+  in showResult
+  ++ showStorage updates
+  ++ [""]
+
+showBranchInfoWithAbi :: DappInfo -> BranchInfo -> [String]
+showBranchInfoWithAbi _ (BranchInfo _ Nothing) = [""]
+showBranchInfoWithAbi srcInfo (BranchInfo vm (Just y)) =
+  case y of
+    (IsZero (Eq (Literal x) _)) ->
+      let
+        abimap = view abiMap <$> currentSolc srcInfo vm
+        method = abimap >>= Map.lookup (num x)
+      in [maybe (show y) (show . view methodSignature) method]
+    y' -> [show y']
+
+renderTree :: (a -> [String])
+           -> (a -> [String])
+           -> Tree a
+           -> Tree [String]
+renderTree showBranch showLeaf (Node b []) = Node (showBranch b ++ showLeaf b) []
+renderTree showBranch showLeaf (Node b cs) = Node (showBranch b) (renderTree showBranch showLeaf <$> cs)

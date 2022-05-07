@@ -2,4 +2,4 @@
 ### dapp-clean -- remove compiled source directory
 ### Usage: dapp clean
 set -e
-(set -x; rm -rf "${DAPP_OUT?} ${DAPP_ABI_OUT?}")
+(set -x; rm -rf "${DAPP_OUT?}")
