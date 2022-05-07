@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/accounts/usbwallet"
@@ -9,8 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-
-	"fmt"
 	"io/ioutil"
 	"math/big"
 	"os"
@@ -33,6 +32,7 @@ import (
 // This gives context to the signed message and prevents signing of transactions.
 func signHash(data []byte) []byte {
 	msg := fmt.Sprintf("\x19EvolutionLand Signed Message:\n%d%s", len(data), data)
+	// msg := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(data), data)
 	return crypto.Keccak256([]byte(msg))
 }
 

@@ -19,23 +19,25 @@ fi
 mapfile -t files < <(find "${DAPP_SRC}" -name '*.sol')
 (set -x; $SOLC "${opts[@]}" "${json_opts[@]}" /=/ "${files[@]}" > "${DAPP_JSON}")
 
+(set -x; rm -rf "${DAPP_ABI_OUT?}")
+
 if [ "$DAPP_BUILD_EXTRACT" ]; then
-  mkdir -p "$DAPP_ABI_OUT"
-  mapfile -t contracts < <(<"$DAPP_JSON" jq '.contracts|keys[]' -r | sort -u -t: -k2 | sort)
-  data=$(<"$DAPP_JSON" jq '.contracts' -r)
-  count=1
-  total=${#contracts[@]}
-  for path in "${contracts[@]}"; do
-    info -ne "Extracting build data... [$count/$total]\\r"
-    ((count++))
-    name="${path#*:}"
-    contract=$(echo "$data" | jq '.[''"'"$path"'"'']')
-    echo "$contract" | jq '.["abi"]' -r > "$DAPP_ABI_OUT/$name.abi"
-    echo "$contract" | jq '.["abi"]' -r > "$DAPP_OUT/$name.abi"
-    echo "$contract" | jq '.["bin"]' -r > "$DAPP_OUT/$name.bin"
-    echo "$contract" | jq '.["bin-runtime"]' -r > "$DAPP_OUT/$name.bin-runtime"
-    echo "$contract" | jq '.["metadata"]' -r > "$DAPP_OUT/$name.metadata"
-  done
-  echo
-  info "warning: --extract is slow and may have filename collisions. All build data can be found in $DAPP_JSON.\\n"
+    mkdir -p "$DAPP_ABI_OUT"
+    mapfile -t contracts < <(<"$DAPP_JSON" jq '.contracts|keys[]' -r | sort -u -t: -k2 | sort)
+    data=$(<"$DAPP_JSON" jq '.contracts' -r)
+    count=1
+    total=${#contracts[@]}
+    for path in "${contracts[@]}"; do
+        info -ne "Extracting build data... [$count/$total]\\r"
+        ((count++))
+        name="${path#*:}"
+        contract=$(echo "$data" | jq '.[''"'"$path"'"'']')
+        echo "$contract" | jq '.["abi"]' -r > "$DAPP_ABI_OUT/$name.abi"
+        echo "$contract" | jq '.["abi"]' -r > "$DAPP_OUT/$name.abi"
+        echo "$contract" | jq '.["bin"]' -r > "$DAPP_OUT/$name.bin"
+        echo "$contract" | jq '.["bin-runtime"]' -r > "$DAPP_OUT/$name.bin-runtime"
+        echo "$contract" | jq '.["metadata"]' -r > "$DAPP_OUT/$name.metadata"
+    done
+    echo
+    info "warning: --extract is slow and may have filename collisions. All build data can be found in $DAPP_JSON.\\n"
 fi
