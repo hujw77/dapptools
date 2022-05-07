@@ -257,10 +257,10 @@ if [[ $SETH_CHAIN ]]; then
       eth_rpc_url=https://pangoro-rpc.darwinia.network
       ;;
     crab)
-      eth_rpc_url=https://crab-rpc.darwinia.network
+      eth_rpc_url=https://darwinia-crab.api.onfinality.io/public/
       ;;
     crabtest)
-      eth_rpc_url=https://crab-rpc.darwinia.network
+      eth_rpc_url= https://crab-rpc.darwinia.network
       ;;
     polygon)
       eth_rpc_url=https://polygon-rpc.com
