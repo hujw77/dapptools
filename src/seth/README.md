@@ -293,6 +293,13 @@ governance token using the ERC20 ABI:
     $ seth call $MKR_TOKEN "totalSupply()(uint)"
     995238778286468792512963
 
+If you want to send a string as an argument, you must surround the string in both single and double quotes.
+    $ TOKEN=0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2
+    $ seth call $TOKEN "getAddress(string)(address)" '"my_string"'
+    0x7Bb0b08587b8a6B8945e09F1Baca426558B0f06a
+
+
+
 If the ABI function has parameters, you can supply them as additional
 arguments; for example, to check the balance of the MakerDAO fund:
 
@@ -681,7 +688,7 @@ Print the decoded events of a contract.
 
 To use this command, you need to set the `SETH_ABI` variable:
 
-    export SETH_ABI=$(seth abi "event Foo(uint bar);")
+    export SETH_ABI=$(seth abi "event Foo(uint bar)")
 
 To use a JSON ABI file:
 
