@@ -4,6 +4,8 @@
 
 set -e
 
+(set -x; rm -rf "${DAPP_ABI_OUT?}")
+
 IFS=" " read -r -a opts <<<"$SOLC_FLAGS"
 json_opts=--combined-json=abi,bin,bin-runtime,srcmap,srcmap-runtime,ast,metadata
 
@@ -18,8 +20,6 @@ fi
 
 mapfile -t files < <(find "${DAPP_SRC}" -name '*.sol')
 (set -x; $SOLC "${opts[@]}" "${json_opts[@]}" /=/ "${files[@]}" > "${DAPP_JSON}")
-
-(set -x; rm -rf "${DAPP_ABI_OUT?}")
 
 if [ "$DAPP_BUILD_EXTRACT" ]; then
     mkdir -p "$DAPP_ABI_OUT"
