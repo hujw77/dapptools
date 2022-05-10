@@ -247,7 +247,7 @@ if [[ $SETH_CHAIN ]]; then
       export ETHERSCAN_API_URL=https://api-testnet.hecoinfo.com/api
       ;;
     heco)
-      eth_rpc_url=https://http-mainnet.huobichain.com
+      eth_rpc_url=https://http-mainnet.hecochain.com
       export ETHERSCAN_API_URL=https://api.hecoinfo.com/api
       ;;
     pangolin)
