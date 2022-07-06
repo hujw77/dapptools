@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -e
-set -x
 jshon+=(-s "$1" -i append)
 jshon+=(-n [])
 keys=("${@:2}")
