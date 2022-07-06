@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -e
+set -x
+jshon+=(-s "$1" -i append)
+jshon+=(-n [])
+keys=("${@:2}")
+for key in "${keys[@]}"; do
+  jshon+=(-s "$key" -i append)
+done
+jshon+=(-i append)
+tag=${ETH_BLOCK:-latest}
+jshon+=(-s "$tag" -i append)
+seth rpc eth_getProof -- "${jshon[@]}"
