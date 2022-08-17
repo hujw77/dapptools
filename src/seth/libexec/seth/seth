@@ -223,7 +223,7 @@ if [[ $SETH_CHAIN ]]; then
       )
       ;;
     sepolia)
-      eth_rpc_url=https://rpc.sepolia.dev
+      eth_rpc_url=https://rpc-sepolia.rockx.com
       export ETHERSCAN_API_URL=https://api-sepolia.etherscan.io/api
       ;;
     optimism-mainnet)
