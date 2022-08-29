@@ -15,7 +15,7 @@ case "$chain_id" in
     export ETHERSCAN_API_URL=https://crab.api.subscan.io/api/scan/evm/contract/verify
     export ETHERSCAN_URL=https://crab.subscan.io/address
   ;;
-  45)
+  46)
     export ETHERSCAN_API_URL=https://darwinia.api.subscan.io/api/scan/evm/contract/verify
     export ETHERSCAN_URL=https://darwinia.subscan.io/address
   ;;
