@@ -9,8 +9,20 @@ if [ "$DAPP_VERBOSE" ]; then set -x; fi
 [[ $1 ]] || (dapp verify-contract-subscan --help >&2 && exit 1)
 [[ $2 ]] || (dapp verify-contract-subscan --help >&2 && exit 1)
 
-export ETHERSCAN_API_URL=https://crab.api.subscan.io/api/scan/evm/contract/verify
-export ETHERSCAN_URL=https://crab.subscan.io/address
+chain_id=$(seth chain-id)
+case "$chain_id" in
+  44)
+    export ETHERSCAN_API_URL=https://crab.api.subscan.io/api/scan/evm/contract/verify
+    export ETHERSCAN_URL=https://crab.subscan.io/address
+  ;;
+  45)
+    export ETHERSCAN_API_URL=https://darwinia.api.subscan.io/api/scan/evm/contract/verify
+    export ETHERSCAN_URL=https://darwinia.subscan.io/address
+  ;;
+  *)
+    echo >&2 "Verification only works on crab and darwinia."
+    exit 1
+esac
 
 path=${1?contractname}
 name=${path#*:}
