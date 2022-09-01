@@ -154,6 +154,13 @@ source=$(hevm flatten --source-file "$file" --json-file "$DAPP_JSON" --dapp-root
 
 source=$(cat <<.
 // Verified by Darwinia Network
+//  _____                      _       _
+// |  __ \                    (_)     (_)
+// | |  | | __ _ _ ____      ___ _ __  _  __ _
+// | |  | |/ _` | '__\ \ /\ / / | '_ \| |/ _` |
+// | |__| | (_| | |   \ V  V /| | | | | | (_| |
+// |_____/ \__,_|_|    \_/\_/ |_|_| |_|_|\__,_|
+//
 
 $source
 .
