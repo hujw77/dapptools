@@ -98,6 +98,7 @@ if [[ $(jq .sourceList "$DAPP_JSON") == null ]]; then
 else
     contract=$(<"$DAPP_JSON" jq -r ".contracts[\"$path\"]")
 fi
+meta=$(jshon <<<"$contract" -e metadata -u)
 version=$(jshon <<<"$meta" -e compiler -e version -u)
 file=$(jshon <<<"$meta" -e settings -e compilationTarget -k)
 optimized=$(jshon <<<"$meta" -e settings -e optimizer -e enabled -u)
