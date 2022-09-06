@@ -4,8 +4,6 @@
 
 set -e
 
-(set -x; rm -rf "${DAPP_ABI_OUT?}")
-
 IFS=" " read -r -a opts <<<"$SOLC_FLAGS"
 json_opts=--combined-json=abi,bin,bin-runtime,srcmap,srcmap-runtime,ast,metadata
 
@@ -22,7 +20,6 @@ mapfile -t files < <(find "${DAPP_SRC}" -name '*.sol')
 (set -x; $SOLC "${opts[@]}" "${json_opts[@]}" /=/ "${files[@]}" > "${DAPP_JSON}")
 
 if [ "$DAPP_BUILD_EXTRACT" ]; then
-    mkdir -p "$DAPP_ABI_OUT"
     mapfile -t contracts < <(<"$DAPP_JSON" jq '.contracts|keys[]' -r | sort -u -t: -k2 | sort)
     data=$(<"$DAPP_JSON" jq '.contracts' -r)
     count=1
@@ -32,7 +29,6 @@ if [ "$DAPP_BUILD_EXTRACT" ]; then
         ((count++))
         name="${path#*:}"
         contract=$(echo "$data" | jq '.[''"'"$path"'"'']')
-        echo "$contract" | jq '.["abi"]' -r > "$DAPP_ABI_OUT/$name.abi"
         echo "$contract" | jq '.["abi"]' -r > "$DAPP_OUT/$name.abi"
         echo "$contract" | jq '.["bin"]' -r > "$DAPP_OUT/$name.bin"
         echo "$contract" | jq '.["bin-runtime"]' -r > "$DAPP_OUT/$name.bin-runtime"

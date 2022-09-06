@@ -13,8 +13,6 @@
 ###              workflows.
 set -e
 
-if [ "$DAPP_VERBOSE" ]; then set -x; fi
-
 info() {
   while [[ $# -gt 0 ]]; do
     opt=$1; shift
@@ -39,8 +37,7 @@ print }'
 
 cd "$DAPP_ROOT"
 
-export DAPP_REMAPPINGS=${DAPP_REMAPPINGS-"$(dapp-remappings)"}
-# use a custom path is DAPP_SOLC is set
+# use a custom path if DAPP_SOLC is set
 export SOLC=${DAPP_SOLC:-solc}
 
 if [ "$DAPP_LINK_TEST_LIBRARIES" = 1 ]; then

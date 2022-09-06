@@ -93,12 +93,10 @@ name=${path#*:}
 address=${2?contractaddress}
 
 # combined-json has a sourceList field
-if [[ $(jq .sourceList "$DAPP_JSON") == null && -z "$DAPP_BUILD_LEGACY" ]]; then
+if [[ $(jq .sourceList "$DAPP_JSON") == null ]]; then
     contract=$(<"$DAPP_JSON" jq -r ".contracts[\"${path/:*/}\"][\"$name\"]")
-    meta=$(<"$DAPP_JSON" jshon -e contracts -e "${path/:*/}" -e "$name" -e metadata -u)
 else
     contract=$(<"$DAPP_JSON" jq -r ".contracts[\"$path\"]")
-    meta=$(jshon <<<"$contract" -e metadata -u)
 fi
 version=$(jshon <<<"$meta" -e compiler -e version -u)
 file=$(jshon <<<"$meta" -e settings -e compilationTarget -k)

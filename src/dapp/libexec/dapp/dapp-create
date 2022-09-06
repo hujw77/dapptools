@@ -20,23 +20,13 @@ mapfile -t contracts < <(<"$DAPP_JSON" jq '.contracts|keys[]' -r)
 
 name=()
 
-if [[ -z "$DAPP_BUILD_LEGACY" && -z "$DAPP_BUILD_EXTRACT" ]]; then
-  for path in "${contracts[@]}"; do
-    if [ -z "${1##*:*}" ]; then
-      [[ "$path" = "${1/:*/}" ]] && [[ -n "$(jq .contracts.\""$path"\".\""${1#*:}"\"[]? "$DAPP_JSON")" ]] && name+=("$path")
-    else
-      [[ -n "$(jq .contracts.\""$path"\".\""$1"\"[]? "$DAPP_JSON")" ]] && name+=("$path")
-    fi
-  done
-else
-  for path in "${contracts[@]}"; do
-    if [ -z "${1##*:*}" ]; then
-      [[ "$path" = "$1" ]] && name+=("$path")
-    else
-      [[ "${path#*:}" = "$1" ]] && name+=("$path")
-    fi
-  done
-fi
+for path in "${contracts[@]}"; do
+  if [ -z "${1##*:*}" ]; then
+    [[ "$path" = "${1/:*/}" ]] && [[ -n "$(jq .contracts.\""$path"\".\""${1#*:}"\"[]? "$DAPP_JSON")" ]] && name+=("$path")
+  else
+    [[ -n "$(jq .contracts.\""$path"\".\""$1"\"[]? "$DAPP_JSON")" ]] && name+=("$path")
+  fi
+done
 
 [[ "${#name[@]}" -eq 0 ]] && {
   echo >&2 "${0##*/}: error: $1 not found"
@@ -49,40 +39,24 @@ fi
   exit 1
 }
 
-if [[ -z "$DAPP_BUILD_LEGACY" && -z "$DAPP_BUILD_EXTRACT" ]]; then
-  path=${name[0]}
-  contract=$(<"$DAPP_JSON" jq .contracts.\""${name[0]}"\".\""${1#*:}"\")
-  abi=$(jq .abi -r <<< "$contract")
-  bin=$(jq .evm.bytecode.object -r <<< "$contract")
-  type=$(seth --abi-constructor <<< "$abi")
-  address=$(set -x; seth send --create "$bin" "${type/constructor/${1#*:}}" "${@:2}")
-  [[ $DAPP_VERIFY_CONTRACT ]] && {
-    echo >&2 "Verifying contract at $address"
-    sleep 5 # give etherscan some time to process the block
-    if [ "$(seth chain-id)" == "44" ] || [ "$(seth chain-id)" == "46" ]
-    then
-      dapp verify-contract-subscan "$path":"${1#*:}" "$address" "${@:2}"
-    else
-      dapp verify-contract "$path":"${1#*:}" "$address" "${@:2}"
-    fi
-  }
-  seth --to-checksum-address "$address"
-else
-  contract=$(<"$DAPP_JSON" jq '.contracts[''"'"${name[0]}"'"'']')
-  abi=$(jq '.["abi"]' -r <<< "$contract")
-  bin=$(jq '.["bin"]' -r <<< "$contract")
-  type=$(seth --abi-constructor <<< "$abi")
-  address=$(set -x; seth send --create "$bin" "${type/constructor/${1#*:}}" "${@:2}")
-  [[ $DAPP_VERIFY_CONTRACT ]] && {
-    echo >&2 "Verifying contract at $address"
-    sleep 5 # give etherscan some time to process the block
-    if [ "$(seth chain-id)" == "44" ] || [ "$(seth chain-id)" == "46" ]
-    then
-      dapp verify-contract-subscan "$1" "$address" "${@:2}" || true
-    else
-      dapp verify-contract "$1" "$address" "${@:2}" || true
-    fi
-  }
-  seth --to-checksum-address "$address"
-fi
+contract=$(<"$DAPP_JSON" jq .contracts.\""${name[0]}"\".\""${1#*:}"\")
+abi=$(jq .abi -r <<< "$contract")
+bin=$(jq .evm.bytecode.object -r <<< "$contract")
+type=$(seth --abi-constructor <<< "$abi")
+address=$(set -x; seth send --create "$bin" "${type/constructor/${1#*:}}" "${@:2}")
+
+[[ $DAPP_VERIFY_CONTRACT ]] && {
+  echo >&2 "Verifying contract at $address"
+  sleep 5 # give etherscan some time to process the block
+
+  if [ "$(seth chain-id)" == "44" ] || [ "$(seth chain-id)" == "46" ]
+  then
+    dapp verify-contract-subscan "$path":"${1#*:}" "$address" "${@:2}" || true
+  else
+    dapp verify-contract "$path":"${1#*:}" "$address" "${@:2}" || true
+  fi
+}
+
+seth --to-checksum-address "$address"
+
 
