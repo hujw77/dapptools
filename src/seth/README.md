@@ -140,10 +140,10 @@ options by exporting environment variables.
     # Look for my key files in a custom directory
     export ETH_KEYSTORE=~/secrets/ethereum
 
-### Example `.sethrc` file that uses infura Kovan testnet
+### Example `.sethrc` file that uses infura Goerli testnet
 
-    # Use Infura's Kovan testnet node for all RPC calls
-    export ETH_RPC_URL=https://kovan.infura.io/v3/<API-KEY>
+    # Use Infura's Goerli testnet node for all RPC calls
+    export ETH_RPC_URL=https://goerli.infura.io/v3/<API-KEY>
 
     # Set an address as the default sender
     export ETH_FROM=0xd08f67044c53d723686e002c5b880f73674e164c
@@ -160,7 +160,7 @@ or the flag `--rpc-url`.
 
 Alternatively, you can use a default remote node (operated by
 [Infura]) using the variable `SETH_CHAIN` or the flag `--chain` (or
-`-C`). Allowed values: `ethlive` (aka `mainnet`), `ropsten`, `kovan`, `rinkeby`, and `goerli`.
+`-C`). Allowed values: `ethlive` (aka `mainnet`), `goerli`.
 
 Note: If you frequently use Seth with the Infura nodes, you should
 [sign up for an Infura API key](https://infura.io/register) and use your
@@ -630,12 +630,12 @@ and normalize it to lowercase.
 Print the symbolic name of the current blockchain by checking the
 genesis block hash.
 
-Outputs one of `ethlive`, `etclive`, `kovan`, `ropsten`, `goerli`, `morden`,
-`rinkeby`, `optimism-mainnet`, `optimism-kovan`, `arbitrum-mainnet`, `bsc`, `bsctest`, `kotti`, `polygon`, or `unknown`.
+Outputs one of `ethlive`, `etclive`, `goerli`, `morden`,
+`optimism-mainnet`, `arbitrum-mainnet`, `bsc`, `bsctest`, `kotti`, `polygon`, or `unknown`.
 
 ### `seth chain-id`
 
-Print the ethereum chain id. `1` for Mainnet, `42` for Kovan, etc.
+Print the ethereum chain id. `1` for Mainnet, `5` for Goerli, etc.
 
 ### `seth code`
 

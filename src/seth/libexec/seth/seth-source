@@ -27,11 +27,11 @@ case "$chain" in
   ethlive|mainnet)
     URL="${ETHERSCAN_API_URL:+https://api.etherscan.io}"
     ;;
-  ropsten|kovan|rinkeby|goerli)
+  goerli)
     URL="${ETHERSCAN_API_URL:+https://api-$chain.etherscan.io}"
     ;;
   *)
-    echo >&2 "Source fetching only works on mainnet, ropsten, kovan, rinkeby, and goerli."
+    echo >&2 "Source fetching only works on mainnet and goerli."
     exit 1
 esac
 

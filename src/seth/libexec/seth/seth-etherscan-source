@@ -29,20 +29,14 @@ case "$chain" in
   ethlive|mainnet)
     URL="${ETHERSCAN_API_URL:+https://api.etherscan.io/api}"
     ;;
-  ropsten|kovan|rinkeby|goerli)
+  goerli)
     URL="${ETHERSCAN_API_URL:+https://api-$chain.etherscan.io/api}"
     ;;
   optimism-mainnet)
     URL="${ETHERSCAN_API_URL:-https://api-optimistic.etherscan.io}"
     ;;
-  optimism-kovan)
-    URL="${ETHERSCAN_API_URL:-https://api-kovan-optimistic.etherscan.io/}"
-    ;;
   arbitrum-mainnet)
     URL="${ETHERSCAN_API_URL:-https://api.arbiscan.io}"
-    ;;
-  arbitrum-rinkeby)
-    URL="${ETHERSCAN_API_URL:-https://api-testnet.arbiscan.io}"
     ;;
   bsctest)
     URL="${ETHERSCAN_API_URL:-https://api-testnet.bscscan.com/api}"
@@ -66,7 +60,7 @@ case "$chain" in
     URL="${ETHERSCAN_API_URL:-https://api.ftmscan.com}"
     ;;
   *)
-    echo >&2 "Source fetching only works on mainnet, ropsten, kovan, rinkeby, goerli, optimism-mainnet, optimism-kovan, arbitrum-mainnet, polygon, and fantom."
+    echo >&2 "Source fetching only works on mainnet, goerli, optimism-mainnet, arbitrum-mainnet, polygon, and fantom."
     exit 1
 esac
 

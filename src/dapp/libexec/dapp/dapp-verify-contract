@@ -27,7 +27,7 @@ case "$chain" in
     export ETHERSCAN_API_URL=https://api.etherscan.io/api
     export ETHERSCAN_URL=https://etherscan.io/address
     ;;
-  ropsten|kovan|rinkeby|goerli)
+  goerli)
     export ETHERSCAN_API_URL=https://api-$chain.etherscan.io/api
     export ETHERSCAN_URL=https://$chain.etherscan.io/address
     ;;
@@ -51,10 +51,6 @@ case "$chain" in
     export ETHERSCAN_API_URL=https://api-optimistic.etherscan.io/api
     export ETHERSCAN_URL=https://optimistic.etherscan.io/address
     ;;
-  optimism-kovan)
-    export ETHERSCAN_API_URL=https://api-kovan-optimistic.etherscan.io/api
-    export ETHERSCAN_URL=https://kovan-optimistic.etherscan.io/address
-    ;;
   polygon)
     export ETHERSCAN_API_URL=https://api.polygonscan.com/api
     export ETHERSCAN_URL=https://polygonscan.com/address
@@ -71,10 +67,6 @@ case "$chain" in
     export ETHERSCAN_API_URL=https://api.arbiscan.io/api
     export ETHERSCAN_URL=https://arbiscan.io/address
     ;;
-  arbitrum-rinkeby)
-    export ETHERSCAN_API_URL=https://api-testnet.arbiscan.io/api
-    export ETHERSCAN_URL=https://testnet.arbiscan.io/address
-    ;;
   avax-mainnet)
     export ETHERSCAN_API_URL=https://api.snowtrace.io/api
     export ETHERSCAN_URL=https://snowtrace.io/address
@@ -84,7 +76,7 @@ case "$chain" in
     export ETHERSCAN_URL=https://testnet.snowtrace.io/address
     ;;
   *)
-    echo >&2 "Verification only works on mainnet, ropsten, kovan, rinkeby, goerli, polygon, fantom, arbitrum and avax."
+    echo >&2 "Verification only works on mainnet, goerli, polygon, fantom, arbitrum and avax."
     exit 1
 esac
 
