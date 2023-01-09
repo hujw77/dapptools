@@ -35,8 +35,14 @@ case "$chain" in
   optimism-mainnet)
     URL="${ETHERSCAN_API_URL:-https://api-optimistic.etherscan.io}"
     ;;
+  optimism-goerli)
+    URL="${ETHERSCAN_API_URL:-https://api-goerli-optimistic.etherscan.io}"
+    ;;
   arbitrum-mainnet)
     URL="${ETHERSCAN_API_URL:-https://api.arbiscan.io}"
+    ;;
+  arbitrum-goerli)
+    URL="${ETHERSCAN_API_URL:-https://api-goerli.arbiscan.io}"
     ;;
   bsctest)
     URL="${ETHERSCAN_API_URL:-https://api-testnet.bscscan.com/api}"
