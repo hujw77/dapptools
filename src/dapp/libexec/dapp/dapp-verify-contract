@@ -51,6 +51,10 @@ case "$chain" in
     export ETHERSCAN_API_URL=https://api-optimistic.etherscan.io/api
     export ETHERSCAN_URL=https://optimistic.etherscan.io/address
     ;;
+  optimism-goerli)
+    export ETHERSCAN_API_URL=https://goerli.optimism.io
+    export ETHERSCAN_URL=https://goerli-optimism.etherscan.io/address
+    ;;
   polygon)
     export ETHERSCAN_API_URL=https://api.polygonscan.com/api
     export ETHERSCAN_URL=https://polygonscan.com/address
@@ -66,6 +70,10 @@ case "$chain" in
   arbitrum-mainnet)
     export ETHERSCAN_API_URL=https://api.arbiscan.io/api
     export ETHERSCAN_URL=https://arbiscan.io/address
+    ;;
+  arbitrum-goerli)
+    export ETHERSCAN_API_URL=https://goerli-rollup.arbitrum.io/rpc
+    export ETHERSCAN_URL=https://goerli.arbiscan.io/address
     ;;
   avax-mainnet)
     export ETHERSCAN_API_URL=https://api.snowtrace.io/api
