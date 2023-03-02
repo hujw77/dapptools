@@ -252,8 +252,7 @@ if [[ $SETH_CHAIN ]]; then
       export ETHERSCAN_API_URL=https://api.hecoinfo.com/api
       ;;
     pangolin)
-      # eth_rpc_url=https://pangolin-rpc.darwinia.network
-      eth_rpc_url=http://g1.dev.darwinia.network:10000
+      eth_rpc_url=https://pangolin-rpc.darwinia.network
       ;;
     pangoro)
       eth_rpc_url=https://pangoro-rpc.darwinia.network
