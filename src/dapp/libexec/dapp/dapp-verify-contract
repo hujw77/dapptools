@@ -23,7 +23,7 @@ if [ "$DAPP_VERBOSE" ]; then set -x; fi
 
 chain=$(seth chain)
 case "$chain" in
-  ethlive|mainnet)
+  ethlive|mainnet|ethereum)
     export ETHERSCAN_API_URL=https://api.etherscan.io/api
     export ETHERSCAN_URL=https://etherscan.io/address
     ;;
