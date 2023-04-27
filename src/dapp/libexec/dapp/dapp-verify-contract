@@ -183,7 +183,7 @@ while [ $count -lt 5 ]; do
   [[ $status = 1 ]] && break;
 done
 
-[[ $status = 0 && $message = "Contract source code already verified" ]] && {
+[[ $status = 0 && $guid = "Contract source code already verified" ]] && {
   echo >&2 "Contract source code already verified."
   echo >&2 "Go to $ETHERSCAN_URL/$2#code"
   exit 0
