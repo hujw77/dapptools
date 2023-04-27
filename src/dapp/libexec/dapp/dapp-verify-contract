@@ -180,14 +180,14 @@ while [ $count -lt 5 ]; do
   message=$(jshon <<<"$response" -e message -u)
   count=$((count + 1))
 
+  [[ $status = 0 && $guid = "Contract source code already verified" ]] && {
+    echo >&2 "Contract source code already verified."
+      echo >&2 "Go to $ETHERSCAN_URL/$2#code"
+      exit 0
+    }
+
   [[ $status = 1 ]] && break;
 done
-
-[[ $status = 0 && $guid = "Contract source code already verified" ]] && {
-  echo >&2 "Contract source code already verified."
-  echo >&2 "Go to $ETHERSCAN_URL/$2#code"
-  exit 0
-}
 
 [[ $status = 0 ]] && {
   echo >&2 "There was an error verifying this contract."
@@ -195,9 +195,6 @@ done
   echo >&2 "Details: $guid"
   exit 1
 }
-
-
-
 
 [[ $DAPP_ASYNC == yes ]] && exit
 
