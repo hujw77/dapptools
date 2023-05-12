@@ -228,7 +228,7 @@ if [[ $SETH_CHAIN ]]; then
       export ETHERSCAN_API_URL=https://api-goerli-optimistic.etherscan.io/api
       ;;
     arbitrum-mainnet)
-      eth_rpc_url=https://arbitrum-mainnet.infura.io/$INFURA_KEY
+      eth_rpc_url=https://arb1.arbitrum.io/rpc
       export ETHERSCAN_API_URL=https://api.arbiscan.io/api
       ;;
     arbitrum-goerli)
