@@ -14,13 +14,13 @@ case $genesis in
   0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9)
     echo sepolia;;
   0x7ca38a1916c42007829c55e69d3e9a73265554b586a499015373241b8a3fa48b)
-    echo optimism-mainnet;;
+    echo optimism;;
   0x02adc9b449ff5f2467b8c674ece7ff9b21319d76c4ad62a67a70d552655927e5)
     # arbitrum mainnet have the same genesis block
     # use the next block to discriminate between the two
     case $(seth block 1 hash 2>/dev/null || echo null) in
       0xe0594250efac73640aeff78ec40aaaaa87f91edb54e5af926ee71a32ef32da34)
-        echo arbitrum-mainnet;;
+        echo arbitrum;;
       *)
         echo unknown;;
     esac;;
