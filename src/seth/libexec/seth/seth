@@ -231,7 +231,7 @@ if [[ $SETH_CHAIN ]]; then
       eth_rpc_url=https://arb1.arbitrum.io/rpc
       export ETHERSCAN_API_URL=https://api.arbiscan.io/api
       ;;
-    arbtest)
+    arbitest)
       eth_rpc_url=https://goerli-rollup.arbitrum.io/rpc
       export ETHERSCAN_API_URL=https://api-goerli.arbiscan.io/api
       ;;
