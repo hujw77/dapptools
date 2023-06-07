@@ -76,7 +76,7 @@ case "$chain" in
     export ETHERSCAN_URL=https://arbiscan.io/address
     ;;
   arbitest)
-    export ETHERSCAN_API_URL=https://api-goerli.arbiscan.io/rpc
+    export ETHERSCAN_API_URL=https://api-goerli.arbiscan.io/api
     export ETHERSCAN_URL=https://goerli.arbiscan.io/address
     ;;
   avax-mainnet)
