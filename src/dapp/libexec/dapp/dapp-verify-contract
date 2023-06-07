@@ -51,7 +51,7 @@ case "$chain" in
     export ETHERSCAN_API_URL=https://api.hecoinfo.com/api
     export ETHERSCAN_URL=https://hecoinfo.com/address
     ;;
-  optimism-mainnet)
+  optimism)
     export ETHERSCAN_API_URL=https://api-optimistic.etherscan.io/api
     export ETHERSCAN_URL=https://optimistic.etherscan.io/address
     ;;
@@ -71,11 +71,11 @@ case "$chain" in
     export ETHERSCAN_API_URL=https://api.ftmscan.com/api
     export ETHERSCAN_URL=https://ftmscan.com/address
     ;;
-  arbitrum-mainnet)
+  arbitrum)
     export ETHERSCAN_API_URL=https://api.arbiscan.io/api
     export ETHERSCAN_URL=https://arbiscan.io/address
     ;;
-  arbitrum-goerli)
+  arbitest)
     export ETHERSCAN_API_URL=https://goerli-rollup.arbitrum.io/rpc
     export ETHERSCAN_URL=https://goerli.arbiscan.io/address
     ;;

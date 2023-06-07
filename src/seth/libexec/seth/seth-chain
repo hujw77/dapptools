@@ -15,15 +15,10 @@ case $genesis in
     echo sepolia;;
   0x7ca38a1916c42007829c55e69d3e9a73265554b586a499015373241b8a3fa48b)
     echo optimism;;
-  0x02adc9b449ff5f2467b8c674ece7ff9b21319d76c4ad62a67a70d552655927e5)
-    # arbitrum mainnet have the same genesis block
-    # use the next block to discriminate between the two
-    case $(seth block 1 hash 2>/dev/null || echo null) in
-      0xe0594250efac73640aeff78ec40aaaaa87f91edb54e5af926ee71a32ef32da34)
-        echo arbitrum;;
-      *)
-        echo unknown;;
-    esac;;
+  0x7ee576b35482195fc49205cec9af72ce14f003b9ae69f6ba0faef4514be8b442)
+    echo arbitrum;;
+  0x4019c44be4a1f5473ac23f50c57ce57a6ae71048531725186291dd05cb055b1c)
+    echo arbitest;;
   0x0cd786a2425d16f152c658316c423e6ce1181e15c3295826d7c9904cba9ce303)
     echo morden;;
   0xbf7e331f7f7c1dd2e05159666b3bf8bc7a8a3a9eb1d518969eab529dd9b88c1a)
