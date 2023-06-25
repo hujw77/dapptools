@@ -31,6 +31,14 @@ case "$chain" in
     export ETHERSCAN_API_URL=https://darwinia.api.subscan.io/api/scan/evm/contract/verifysource
     export ETHERSCAN_URL=https://darwinia.subscan.io/address
     ;;
+  pangolin)
+    export ETHERSCAN_API_URL=https://pangolin.api.subscan.io/api/scan/evm/contract/verifysource
+    export ETHERSCAN_URL=https://pangolin.subscan.io/address
+    ;;
+  pangoro)
+    export ETHERSCAN_API_URL=https://pangoro.api.subscan.io/api/scan/evm/contract/verifysource
+    export ETHERSCAN_URL=https://pangoro.subscan.io/address
+    ;;
   goerli)
     export ETHERSCAN_API_URL=https://api-$chain.etherscan.io/api
     export ETHERSCAN_URL=https://$chain.etherscan.io/address

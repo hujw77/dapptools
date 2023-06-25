@@ -35,9 +35,9 @@ case $genesis in
     echo heco;;
   0x495f0606f1389eb6908f995904db73791003c3e141ab99e69bdd65638ba212ac)
     echo pangoro;;
-  0x8cb4be888addea71db83938063eaf356c90938a42b6390a779498d3ed2a41395)
-    echo pangolin;;
   0x74975388b6e087a5c8f18eb5a6ac251f3741adc242879efd22410c0b54d2e8a4)
+    echo pangolin;;
+  0xa9c28ce2141b56c474f1dc504bee9b01eb1bd7d1a507580d5519d4437a97de1b)
     echo polygon;;
   0x6cc2a18992b91b36bedd61f02568bbd22be00e40bd1e38ddfc68ec75a31a3b1a)
     echo darwinia;;
