@@ -47,7 +47,6 @@ else:
 tmpljson["settings"].pop('evmVersion', None)
 if os.getenv('DAPP_EVM_VERSION'):
     tmpljson["settings"]["evmVersion"] = os.getenv('DAPP_EVM_VERSION')
-tmpljson["settings"].pop('viaIR', None)
 if os.getenv('DAPP_VIA_IR') != '1':
     tmpljson["settings"].pop('viaIR', None)
 tmpljson["settings"].pop('debug', None)
