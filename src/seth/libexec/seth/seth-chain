@@ -18,7 +18,7 @@ case $genesis in
   0x7ca38a1916c42007829c55e69d3e9a73265554b586a499015373241b8a3fa48b)
     echo optimism;;
   0xc1fc15cd51159b1f1e5cbc4b82e85c1447ddfa33c52cf1d98d14fba0d6354be1)
-    echo optimism-goerli
+    echo optimism-goerli;;
   0x102de6ffb001480cc9b8b548fd05c34cd4f46ae4aa91759393db90ea0409887d)
     echo optimism-sepolia
   0x7ee576b35482195fc49205cec9af72ce14f003b9ae69f6ba0faef4514be8b442)
