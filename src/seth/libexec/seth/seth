@@ -275,8 +275,17 @@ if [[ $SETH_CHAIN ]]; then
       export ETHERSCAN_API_URL=https://api.polygonscan.com/api
       ;;
     mumbai)
-      eth_rpc_url=https://matic-mumbai.chainstacklabs.com
+      eth_rpc_url=https://rpc-mumbai.maticvigil.com
       export ETHERSCAN_API_URL=https://api-testnet.polygonscan.com/api
+      ;;
+    mantle)
+      eth_rpc_url=https://rpc.mantle.xyz
+      ;;
+    zksync)
+      eth_rpc_url=https://mainnet.era.zksync.io
+      ;;
+    zksynctest)
+      eth_rpc_url=https://testnet.era.zksync.dev
       ;;
     *)
       echo >&2 "${0##*/}: error: unknown chain: \\'$SETH_CHAIN'"
