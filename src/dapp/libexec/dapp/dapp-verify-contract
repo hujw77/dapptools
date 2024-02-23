@@ -39,7 +39,7 @@ case "$chain" in
     export ETHERSCAN_API_URL=https://pangoro.api.subscan.io/api/scan/evm/contract/verifysource
     export ETHERSCAN_URL=https://pangoro.subscan.io/address
     ;;
-  goerli)
+  goerli|sepolia)
     export ETHERSCAN_API_URL=https://api-$chain.etherscan.io/api
     export ETHERSCAN_URL=https://$chain.etherscan.io/address
     ;;
@@ -96,7 +96,7 @@ case "$chain" in
     export ETHERSCAN_URL=https://testnet.snowtrace.io/address
     ;;
   *)
-    echo >&2 "Verification only works on mainnet, goerli, polygon, fantom, arbitrum and avax."
+    echo >&2 "Verification only works on mainnet, goerli, sepolia, polygon, fantom, arbitrum and avax."
     exit 1
 esac
 
