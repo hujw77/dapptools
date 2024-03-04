@@ -29,6 +29,8 @@ case $genesis in
     echo arbitrum-sepolia;;
   0x0cd786a2425d16f152c658316c423e6ce1181e15c3295826d7c9904cba9ce303)
     echo morden;;
+  0xb689b35ef29d0bec5816938e0e52683c7257d2e325420ea69b739a2be4754b89)
+    echo blast;;
   0x14c2283285a88fe5fce9bf5c573ab03d6616695d717b12a127188bcacfc743c4)
     echo kotti;;
   0x6d3c66c5357ec91d5c43af47e234a939b22557cbb552dc45bebbceeed90fbe34)
