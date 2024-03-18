@@ -2,6 +2,13 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
+	"math/big"
+	"os"
+	"runtime"
+	"strings"
+	"syscall"
+
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/accounts/usbwallet"
@@ -10,12 +17,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"io/ioutil"
-	"math/big"
-	"os"
-	"runtime"
-	"strings"
-	"syscall"
 
 	"gopkg.in/urfave/cli.v1"
 
@@ -31,8 +32,8 @@ import (
 //
 // This gives context to the signed message and prevents signing of transactions.
 func signHash(data []byte) []byte {
-	msg := fmt.Sprintf("\x19EvolutionLand Signed Message:\n%d%s", len(data), data)
-	// msg := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(data), data)
+	// msg := fmt.Sprintf("\x19EvolutionLand Signed Message:\n%d%s", len(data), data)
+	msg := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(data), data)
 	return crypto.Keccak256([]byte(msg))
 }
 
@@ -71,7 +72,6 @@ func getWallets(c *cli.Context) []accounts.Wallet {
 }
 
 func getWalletData(c *cli.Context, defaultHDPaths cli.StringSlice, from common.Address) (*accounts.Account, string, accounts.Wallet, error) {
-
 	wallets := getWallets(c)
 
 	var wallet accounts.Wallet
@@ -375,9 +375,7 @@ func main() {
 				chainID := math.MustParseBig256(c.String("chain-id"))
 				gasPrice := math.MustParseBig256(c.String("gas-price"))
 
-				var (
-					prioFee *big.Int
-				)
+				var prioFee *big.Int
 
 				if txtype == types.DynamicFeeTxType {
 					prioFee = math.MustParseBig256(c.String("prio-fee"))
