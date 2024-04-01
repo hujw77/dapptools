@@ -291,6 +291,9 @@ if [[ $SETH_CHAIN ]]; then
     zksynctest)
       eth_rpc_url=https://testnet.era.zksync.dev
       ;;
+    taiko-katla)
+      eth_rpc_url=https://rpc.katla.taiko.xyz
+      ;;
     *)
       echo >&2 "${0##*/}: error: unknown chain: \\'$SETH_CHAIN'"
       exit 1

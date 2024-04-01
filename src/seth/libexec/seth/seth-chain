@@ -57,6 +57,8 @@ case $genesis in
     echo mantle;;
   0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c)
     echo zksync;;
+  0x7be2de998c4f9f94a074b64aadb426ab6dcb1132aff0a9ad49f0caf105ea680e)
+    echo taiko-katla;;
   0x00000000000003e83fddf1e9330f0a8691d9f0b2af57b38c3bb85488488a40df)
     echo fantom;;
   0x31ced5b9beb7f8782b014660da0cb18cc409f121f408186886e1ca3e8eeca96b)
