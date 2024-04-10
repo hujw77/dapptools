@@ -215,6 +215,10 @@ if [[ $SETH_CHAIN ]]; then
         ~/{.local/share,Library/Application\ Support}/io.parity.ethereum/keys/"$SETH_CHAIN"/
       )
       ;;
+    base)
+      eth_rpc_url=https://mainnet.base.org
+      export ETHERSCAN_API_URL=https://basescan.org/api
+      ;;
     blast)
       eth_rpc_url=https://rpc.blast.io
       export ETHERSCAN_API_URL=https://api.blastscan.io/api
