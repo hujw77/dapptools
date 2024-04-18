@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -e
 number=$1
-[[ $1 = latest ]] || number=$(seth --to-hex "$1")
+[[ $1 = latest ]] || \
+[[ $1 = finalized ]] || \
+[[ $1 = earliest ]] || \
+[[ $1 = safe ]] || \
+[[ $1 = pending ]] || \
+number=$(seth --to-hex "$1")
 jshon+=(-s "$number" -i append)
 jshon+=(-n false -i append)
 seth rpc eth_getBlockByNumber -- "${jshon[@]}"

@@ -39,24 +39,34 @@ done
   exit 1
 }
 
-contract=$(<"$DAPP_JSON" jq .contracts.\""${name[0]}"\".\""${1#*:}"\")
-abi=$(jq .abi -r <<< "$contract")
-bin=$(jq .evm.bytecode.object -r <<< "$contract")
-type=$(seth --abi-constructor <<< "$abi")
-address=$(set -x; seth send --create "$bin" "${type/constructor/${1#*:}}" "${@:2}")
-
-[[ $DAPP_VERIFY_CONTRACT ]] && {
-  echo >&2 "Verifying contract at $address"
-  sleep 5 # give etherscan some time to process the block
-
-  if [ "$(seth chain-id)" == "44" ] || [ "$(seth chain-id)" == "46" ]
-  then
-    dapp verify-contract-subscan "$path":"${1#*:}" "$address" "${@:2}" || true
-  else
-    dapp verify-contract "$path":"${1#*:}" "$address" "${@:2}" || true
-  fi
-}
-
-seth --to-checksum-address "$address"
-
-
+if [[ -z "$DAPP_BUILD_LEGACY" && -z "$DAPP_BUILD_EXTRACT" ]]; then
+  path=${name[0]}
+  contract=$(<"$DAPP_JSON" jq .contracts.\""${name[0]}"\".\""${1#*:}"\")
+  abi=$(jq .abi -r <<< "$contract")
+  bin=$(jq .evm.bytecode.object -r <<< "$contract")
+  type=$(seth --abi-constructor <<< "$abi")
+  address=$(set -x; seth send --create "$bin" "${type/constructor/${1#*:}}" "${@:2}")
+  [[ $DAPP_VERIFY_CONTRACT ]] && {
+    echo >&2 "Verifying contract at $address"
+    sleep 5 # give etherscan some time to process the block
+    if [ "$(seth chain-id)" == "44" ] || [ "$(seth chain-id)" == "46" ]
+    then
+      dapp verify-contract-subscan "$path":"${1#*:}" "$address" "${@:2}"
+    else
+      dapp verify-contract "$path":"${1#*:}" "$address" "${@:2}"
+    fi
+  }
+  seth --to-checksum-address "$address"
+else
+  contract=$(<"$DAPP_JSON" jq '.contracts[''"'"${name[0]}"'"'']')
+  abi=$(jq '.["abi"]' -r <<< "$contract")
+  bin=$(jq '.["bin"]' -r <<< "$contract")
+  type=$(seth --abi-constructor <<< "$abi")
+  address=$(set -x; seth send --create "$bin" "${type/constructor/${1#*:}}" "${@:2}")
+  [[ $DAPP_VERIFY_CONTRACT ]] && {
+    echo >&2 "Verifying contract at $address"
+    sleep 5 # give etherscan some time to process the block
+    dapp verify-contract "$1" "$address" "${@:2}" || true
+  }
+  seth --to-checksum-address "$address"
+fi

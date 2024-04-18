@@ -293,7 +293,7 @@ checkAssert errs c signature' concreteArgs = verifyContract c signature' concret
     - 0x41: If you allocate too much memory or create an array that is too large.
     - 0x51: If you call a zero-initialized variable of internal function type.
 
-  see: https://docs.soliditylang.org/en/v0.8.6/control-structures.html?highlight=Panic#panic-via-assert-and-error-via-require
+  see: https://docs.soliditylang.org/en/v0.8.17/control-structures.html?highlight=Panic#panic-via-assert-and-error-via-require
 -}
 checkAssertions :: [Word256] -> Postcondition
 checkAssertions errs (_, out) = case view result out of

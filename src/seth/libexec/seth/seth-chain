@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 ### seth-chain -- print the symbolic name of the current blockchain
-### Print the name of the current chain (`ethlive', `kovan', etc).
+### Print the name of the current chain (`ethlive' etc).
 set -e
 genesis=$(seth block 0 hash)
 case $genesis in
@@ -11,33 +11,28 @@ case $genesis in
       *)
         echo ethlive;;
     esac;;
-  0xa3c565fc15c7478862d50ccd6561e3c06b24cc509bf388941c25ea985ce32cb9)
-    echo kovan;;
-  0x41941023680923e0fe4d74a34bdac8141f2540e3ae90623718e47d66d1ca4a2d)
-    echo ropsten;;
+  0xf712aa9241cc24369b143cf6dce85f0902a9731e70d66818a3a5845b296c73dd)
+    echo base;;
+  0xbf7e331f7f7c1dd2e05159666b3bf8bc7a8a3a9eb1d518969eab529dd9b88c1a)
+    echo goerli;;
   0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9)
     echo sepolia;;
   0x7ca38a1916c42007829c55e69d3e9a73265554b586a499015373241b8a3fa48b)
-    echo optimism-mainnet;;
-  0x02adc9b449ff5f2467b8c674ece7ff9b21319d76c4ad62a67a70d552655927e5)
-    echo optimism-kovan;;
+    echo optimism;;
+  0xc1fc15cd51159b1f1e5cbc4b82e85c1447ddfa33c52cf1d98d14fba0d6354be1)
+    echo optimism-goerli;;
+  0x102de6ffb001480cc9b8b548fd05c34cd4f46ae4aa91759393db90ea0409887d)
+    echo optimism-sepolia;;
   0x7ee576b35482195fc49205cec9af72ce14f003b9ae69f6ba0faef4514be8b442)
-    # arbitrum mainnet and arbitrum rinkeby have the same genesis block
-    # use the next block to discriminate between the two
-    case $(seth block 1 hash 2>/dev/null || echo null) in
-      0xe0594250efac73640aeff78ec40aaaaa87f91edb54e5af926ee71a32ef32da34)
-        echo arbitrum-mainnet;;
-      0x5b754d2c394d7e8852f5ef8ef97314cb4b566b027e5b943bee2b0b2d53fdc43e)
-        echo arbitrum-rinkeby;;
-      *)
-        echo unknown;;
-    esac;;
+    echo arbitrum;;
+  0x4019c44be4a1f5473ac23f50c57ce57a6ae71048531725186291dd05cb055b1c)
+    echo arbitrum-goerli;;
+  0x77194da4010e549a7028a9c3c51c3e277823be6ac7d138d0bb8a70197b5c004c)
+    echo arbitrum-sepolia;;
   0x0cd786a2425d16f152c658316c423e6ce1181e15c3295826d7c9904cba9ce303)
     echo morden;;
-  0x6341fd3daf94b748c72ced5a5b26028f2474f5f00d824504e4fa37a75767e177)
-    echo rinkeby;;
-  0xbf7e331f7f7c1dd2e05159666b3bf8bc7a8a3a9eb1d518969eab529dd9b88c1a)
-    echo goerli;;
+  0xb689b35ef29d0bec5816938e0e52683c7257d2e325420ea69b739a2be4754b89)
+    echo blast;;
   0x14c2283285a88fe5fce9bf5c573ab03d6616695d717b12a127188bcacfc743c4)
     echo kotti;;
   0x6d3c66c5357ec91d5c43af47e234a939b22557cbb552dc45bebbceeed90fbe34)
@@ -48,12 +43,24 @@ case $genesis in
     echo hecotest;;
   0x5751d1772ebc82d52d19d96157bb3f13ca8417217e3c0913adf15f04eb4cb144)
     echo heco;;
-  0x8cb4be888addea71db83938063eaf356c90938a42b6390a779498d3ed2a41395)
+  0x495f0606f1389eb6908f995904db73791003c3e141ab99e69bdd65638ba212ac)
+    echo pangoro;;
+  0x74975388b6e087a5c8f18eb5a6ac251f3741adc242879efd22410c0b54d2e8a4)
     echo pangolin;;
   0xa9c28ce2141b56c474f1dc504bee9b01eb1bd7d1a507580d5519d4437a97de1b)
     echo polygon;;
+  0x6cc2a18992b91b36bedd61f02568bbd22be00e40bd1e38ddfc68ec75a31a3b1a)
+    echo darwinia;;
+  0x1687b1b70f919132bb7f80ef8a40ed686826f2b76680c360d91c5d765eaf23ac)
+    echo crab;;
   0x7b66506a9ebdbf30d32b43c5f15a3b1216269a1ec3a75aa3182b86176a2b1ca7)
     echo mumbai;;
+  0x0a0eb32c4b024b28da5bf83356f7987c1b0612bbfbc9156186c59c834bfcd013)
+    echo mantle;;
+  0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c)
+    echo zksync;;
+  0x7be2de998c4f9f94a074b64aadb426ab6dcb1132aff0a9ad49f0caf105ea680e)
+    echo taiko-katla;;
   0x00000000000003e83fddf1e9330f0a8691d9f0b2af57b38c3bb85488488a40df)
     echo fantom;;
   0x31ced5b9beb7f8782b014660da0cb18cc409f121f408186886e1ca3e8eeca96b)
