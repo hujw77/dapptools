@@ -1,4 +1,8 @@
 result
 result-*
 dist-newstyle/
+<<<<<<< HEAD
 .DS_Store
+=======
+src/ethsign/ethsign
+>>>>>>> upstream
