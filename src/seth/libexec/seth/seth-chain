@@ -43,7 +43,7 @@ case $genesis in
     echo hecotest;;
   0x5751d1772ebc82d52d19d96157bb3f13ca8417217e3c0913adf15f04eb4cb144)
     echo heco;;
-  0x495f0606f1389eb6908f995904db73791003c3e141ab99e69bdd65638ba212ac)
+  0xbcfdf3e8d59cdf345a8956f288f7b6f3a7f50f5ca97ff486d9d0be2e0c263532)
     echo pangoro;;
   0x74975388b6e087a5c8f18eb5a6ac251f3741adc242879efd22410c0b54d2e8a4)
     echo pangolin;;
