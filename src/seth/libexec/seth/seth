@@ -298,6 +298,15 @@ if [[ $SETH_CHAIN ]]; then
     taiko-katla)
       eth_rpc_url=https://rpc.katla.taiko.xyz
       ;;
+    gnosis)
+      eth_rpc_url=https://rpc.gnosischain.com
+      ;;
+    astar-zkevm)
+      eth_rpc_url=https://rpc.startale.com/astar-zkevm
+      ;;
+    scroll)
+      eth_rpc_url=https://rpc.scroll.io
+      ;;
     *)
       echo >&2 "${0##*/}: error: unknown chain: \\'$SETH_CHAIN'"
       exit 1
