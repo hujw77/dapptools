@@ -263,8 +263,8 @@ if [[ $SETH_CHAIN ]]; then
       eth_rpc_url=https://http-mainnet.hecochain.com
       export ETHERSCAN_API_URL=https://api.hecoinfo.com/api
       ;;
-    pangolin)
-      eth_rpc_url=https://pangolin-rpc.darwinia.network
+    koi)
+      eth_rpc_url=https://koi-rpc.darwinia.network
       ;;
     pangoro)
       eth_rpc_url=https://fraa-flashbox-2871-rpc.a.stagenet.tanssi.network
@@ -295,8 +295,8 @@ if [[ $SETH_CHAIN ]]; then
     zksynctest)
       eth_rpc_url=https://testnet.era.zksync.dev
       ;;
-    taiko-katla)
-      eth_rpc_url=https://rpc.katla.taiko.xyz
+    taiko-hekla)
+      eth_rpc_url=https://rpc.hekla.taiko.xyz
       ;;
     gnosis)
       eth_rpc_url=https://rpc.gnosischain.com
@@ -306,6 +306,9 @@ if [[ $SETH_CHAIN ]]; then
       ;;
     scroll)
       eth_rpc_url=https://rpc.scroll.io
+      ;;
+    moonbeam)
+      eth_rpc_url=https://rpc.api.moonbeam.network
       ;;
     *)
       echo >&2 "${0##*/}: error: unknown chain: \\'$SETH_CHAIN'"
